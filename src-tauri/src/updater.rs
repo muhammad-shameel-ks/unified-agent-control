@@ -99,7 +99,8 @@ pub fn run_update() -> Result<(), String> {
 
     let asset_pattern = match distro.as_str() {
         "arch" | "manjaro" | "endeavouros" => ".pkg.tar.zst",
-        "ubuntu" | "debian" | "linuxmint" | "pop" | "fedora" => ".deb",
+        "fedora" | "rhel" | "centos" | "rocky" | "alma" => ".rpm",
+        "ubuntu" | "debian" | "linuxmint" | "pop" => ".deb",
         _ => ".AppImage",
     };
 
@@ -129,6 +130,16 @@ pub fn run_update() -> Result<(), String> {
                 .map_err(|e| format!("Failed to run pacman: {}", e))?;
             if !status.success() {
                 return Err("pacman install failed".to_string());
+            }
+        }
+        "fedora" | "rhel" | "centos" | "rocky" | "alma" => {
+            let status = Command::new("sudo")
+                .args(["rpm", "-i"])
+                .arg(download_path.to_str().unwrap())
+                .status()
+                .map_err(|e| format!("Failed to run rpm: {}", e))?;
+            if !status.success() {
+                return Err("rpm install failed".to_string());
             }
         }
         "ubuntu" | "debian" | "linuxmint" | "pop" => {

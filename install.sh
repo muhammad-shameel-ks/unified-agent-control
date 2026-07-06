@@ -63,7 +63,10 @@ download_asset() {
         arch|manjaro|endeavouros)
             pattern=".pkg.tar.zst"
             ;;
-        ubuntu|debian|linuxmint|pop|fedora)
+        fedora|rhel|centos|rocky|alma)
+            pattern=".rpm"
+            ;;
+        ubuntu|debian|linuxmint|pop)
             pattern=".deb"
             ;;
         *)
@@ -94,6 +97,9 @@ install_package() {
     case "$distro" in
         arch|manjaro|endeavouros)
             sudo pacman -U --noconfirm "$file"
+            ;;
+        fedora|rhel|centos|rocky|alma)
+            sudo rpm -i "$file"
             ;;
         ubuntu|debian|linuxmint|pop)
             sudo dpkg -i "$file"

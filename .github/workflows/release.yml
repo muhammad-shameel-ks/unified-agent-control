@@ -103,3 +103,42 @@ jobs:
         with:
           name: arch-bundle
           path: src-tauri/target/release/bundle/pacman/*.pkg.tar.zst
+
+  build-fedora:
+    runs-on: ubuntu-22.04
+    container:
+      image: fedora:latest
+      options: --user root
+    steps:
+      - name: Install base dependencies
+        run: |
+          dnf install -y git webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel patchelf openssl-devel nodejs npm curl gcc
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env"
+
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Build app
+        run: |
+          source "$HOME/.cargo/env"
+          pnpm tauri build
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fedora-bundle
+          path: src-tauri/target/release/bundle/rpm/*.rpm
