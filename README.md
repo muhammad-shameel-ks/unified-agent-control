@@ -1,7 +1,87 @@
-# Tauri + React + Typescript
+# Unified Agent Control
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+A desktop application that serves as a centralized management hub for multiple AI coding agents. Configure, monitor, and control agents like **OpenCode**, **Claude Code**, and **AGY (Gemini)** from a single interface.
 
-## Recommended IDE Setup
+## Features
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- **Agent Dashboard** — View and manage OpenCode, Claude Code, and AGY agents with real-time status
+- **Project Management** — Associate projects with agents, track running/idle state, and launch sessions
+- **MCP Server Control** — Enable/disable Model Context Protocol servers per agent with persistent config
+- **Skill Management** — Toggle agent skills with automatic config sync to disk
+- **Config Migration** — One-click migration of agent configs to a unified `~/.config/uac/` structure with symlinks
+- **Global Settings** — Shared MCP servers, unified skill sets, and global agent rules
+- **Dark/Light Mode** — Smooth theme transitions using the View Transitions API
+- **Linux-First** — Custom window controls with Hyprland/Wayland compositor support
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 19 + TypeScript + Vite |
+| Styling | Tailwind CSS v4 + shadcn/ui + BEUI |
+| Animation | Motion (Framer Motion) |
+| Backend | Tauri v2 + Rust |
+| Package Manager | pnpm |
+
+## Getting Started
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) (v18+)
+- [Rust](https://www.rust-lang.org/tools/install)
+- [pnpm](https://pnpm.io/)
+- [Tauri Prerequisites](https://v2.tauri.app/start/prerequisites/)
+
+### Install Dependencies
+
+```bash
+pnpm install
+```
+
+### Development
+
+```bash
+pnpm tauri dev
+```
+
+### Build
+
+```bash
+pnpm tauri build
+```
+
+## Project Structure
+
+```
+unified-agent-control/
+├── src/                    # Frontend (React + TypeScript)
+│   ├── components/
+│   │   ├── dashboard.tsx       # Agent cards, project list, config modals
+│   │   ├── global-settings.tsx # MCP servers, skills, rules
+│   │   ├── sidebar.tsx         # Navigation sidebar
+│   │   ├── window-controls.tsx # Custom titlebar (Linux)
+│   │   └── motion/             # Animated UI components (BEUI)
+│   ├── lib/                    # Utilities and hooks
+│   └── App.tsx                 # Root layout and routing
+│
+├── src-tauri/              # Backend (Rust)
+│   └── src/
+│       ├── main.rs             # Entry point
+│       └── lib.rs              # Tauri commands (config I/O, migration, platform detection)
+│
+├── public/icons/           # Agent brand assets
+└── package.json
+```
+
+## How It Works
+
+Unified Agent Control reads and writes agent configuration files directly on disk:
+
+- **OpenCode** — Reads `~/.config/opencode/opencode.json` (JSONC) and `skills/` directory
+- **Claude Code** — Reads `~/.claude.json` and `~/.claude/skills/`
+
+The app can migrate these configs into a centralized `~/.config/uac/` directory and create symlinks back to the original locations, letting you manage everything from one place while agents continue working normally.
+
+## License
+
+MIT
