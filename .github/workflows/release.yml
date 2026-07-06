@@ -80,7 +80,7 @@ jobs:
       - name: Install base dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git webkit2gtk-4.1 appmenu-gtk-module libappindicator-gtk3 librsvg patchelf xdg-utils nodejs npm curl
+          pacman -S --noconfirm base-devel git webkit2gtk-4.1 appmenu-gtk-module libappindicator-gtk3 librsvg patchelf xdg-utils zstd nodejs npm curl
 
       - name: Install Rust
         run: |
@@ -112,10 +112,42 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build app
+      - name: Build binary
         run: |
           source "$HOME/.cargo/env"
-          pnpm tauri build --bundles pacman
+          pnpm tauri build --no-bundle
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create pacman package
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          PKGDIR=$(mktemp -d)
+
+          mkdir -p "$PKGDIR/usr/bin"
+          mkdir -p "$PKGDIR/usr/share/applications"
+          mkdir -p "$PKGDIR/usr/share/icons/hicolor/128x128/apps"
+
+          cp src-tauri/target/release/unified-agent-control "$PKGDIR/usr/bin/"
+          chmod 755 "$PKGDIR/usr/bin/unified-agent-control"
+
+          printf '[Desktop Entry]\nType=Application\nName=Unified Agent Control\nComment=Centralized management hub for AI coding agents\nExec=unified-agent-control\nIcon=unified-agent-control\nCategories=Development;Utility;\nTerminal=false\n' \
+            > "$PKGDIR/usr/share/applications/unified-agent-control.desktop"
+
+          cp src-tauri/icons/128x128.png "$PKGDIR/usr/share/icons/hicolor/128x128/apps/unified-agent-control.png"
+
+          printf 'pkgname = unified-agent-control\npkgver = %s\npkgrel = 1\narch = x86_64\npkgdesc = Centralized management hub for AI coding agents\nurl = https://github.com/muhammad-shameel-ks/unified-agent-control\npackager = UAC CI\nlicense = MIT\ndepend = webkit2gtk-4.1\ndepend = libappindicator-gtk3\ndepend = librsvg\ndepend = patchelf\n' \
+            "$VERSION" > "$PKGDIR/.PKGINFO"
+
+          cd "$PKGDIR"
+          bsdtar -cf - .PKGINFO usr/ | zstd -19 -T0 -o "unified-agent-control-${VERSION}-1-x86_64.pkg.tar.zst"
+
+          mkdir -p "$GITHUB_WORKSPACE/src-tauri/target/release/bundle/pacman"
+          cp "unified-agent-control-${VERSION}-1-x86_64.pkg.tar.zst" "$GITHUB_WORKSPACE/src-tauri/target/release/bundle/pacman/"
 
       - name: Upload pacman artifact
         uses: actions/upload-artifact@v4
