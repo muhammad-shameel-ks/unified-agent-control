@@ -134,6 +134,7 @@ jobs:
 
           cp src-tauri/target/release/unified-agent-control "$PKGDIR/usr/bin/"
           chmod 755 "$PKGDIR/usr/bin/unified-agent-control"
+          ln -s unified-agent-control "$PKGDIR/usr/bin/uac"
 
           printf '[Desktop Entry]\nType=Application\nName=Unified Agent Control\nComment=Centralized management hub for AI coding agents\nExec=unified-agent-control\nIcon=unified-agent-control\nCategories=Development;Utility;\nTerminal=false\n' \
             > "$PKGDIR/usr/share/applications/unified-agent-control.desktop"

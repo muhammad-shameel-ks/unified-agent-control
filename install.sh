@@ -144,6 +144,11 @@ main() {
     info "Installing..."
     install_package "$asset_path" "$distro"
 
+    if ! command -v uac >/dev/null 2>&1; then
+        sudo ln -sf "$(command -v "$BINARY_NAME")" "$INSTALL_DIR/uac" 2>/dev/null \
+            || warn "Could not create 'uac' symlink; use '$BINARY_NAME' instead."
+    fi
+
     ok "Unified Agent Control v$latest_version installed successfully!"
     info "Run 'uac' to start the application"
 }
