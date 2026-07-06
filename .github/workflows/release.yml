@@ -73,7 +73,9 @@ jobs:
       image: archlinux:latest
       options: --user root
     env:
+      HOME: /root
       CARGO_HOME: /root/.cargo
+      RUSTUP_HOME: /root/.rustup
     steps:
       - name: Install base dependencies
         run: |
@@ -102,6 +104,7 @@ jobs:
           path: |
             /root/.cargo/registry
             /root/.cargo/git
+            /root/.rustup
             src-tauri/target
           key: ${{ runner.os }}-arch-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-arch-cargo-
@@ -126,7 +129,9 @@ jobs:
       image: fedora:latest
       options: --user root
     env:
+      HOME: /root
       CARGO_HOME: /root/.cargo
+      RUSTUP_HOME: /root/.rustup
     steps:
       - name: Install base dependencies
         run: |
@@ -154,6 +159,7 @@ jobs:
           path: |
             /root/.cargo/registry
             /root/.cargo/git
+            /root/.rustup
             src-tauri/target
           key: ${{ runner.os }}-fedora-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-fedora-cargo-
