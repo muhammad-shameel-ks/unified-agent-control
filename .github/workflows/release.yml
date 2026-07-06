@@ -30,6 +30,17 @@ jobs:
         with:
           version: 9
 
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -39,7 +50,7 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build app
         uses: tauri-apps/tauri-action@v0
@@ -69,6 +80,8 @@ jobs:
     container:
       image: archlinux:latest
       options: --user root
+    env:
+      CARGO_HOME: /root/.cargo
     steps:
       - name: Install base dependencies
         run: |
@@ -78,20 +91,31 @@ jobs:
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source "$HOME/.cargo/env"
 
       - uses: actions/checkout@v4
 
       - name: Install pnpm
         run: npm install -g pnpm
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - name: Cache pnpm store
+        uses: actions/cache@v4
         with:
-          workspaces: "./src-tauri -> target"
+          path: /root/.local/share/pnpm/store/v10
+          key: ${{ runner.os }}-arch-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-arch-pnpm-store-
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            /root/.cargo/registry
+            /root/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-arch-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-arch-cargo-
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build app
         run: |
@@ -109,6 +133,8 @@ jobs:
     container:
       image: fedora:latest
       options: --user root
+    env:
+      CARGO_HOME: /root/.cargo
     steps:
       - name: Install base dependencies
         run: |
@@ -117,20 +143,31 @@ jobs:
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source "$HOME/.cargo/env"
 
       - uses: actions/checkout@v4
 
       - name: Install pnpm
         run: npm install -g pnpm
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - name: Cache pnpm store
+        uses: actions/cache@v4
         with:
-          workspaces: "./src-tauri -> target"
+          path: /root/.local/share/pnpm/store/v10
+          key: ${{ runner.os }}-fedora-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-fedora-pnpm-store-
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            /root/.cargo/registry
+            /root/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-fedora-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-fedora-cargo-
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build app
         run: |
