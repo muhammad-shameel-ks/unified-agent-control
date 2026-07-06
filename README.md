@@ -2,6 +2,40 @@
 
 A desktop application that serves as a centralized management hub for multiple AI coding agents. Configure, monitor, and control agents like **OpenCode**, **Claude Code**, and **AGY (Gemini)** from a single interface.
 
+## Installation
+
+### Quick Install (curl)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/muhammad-shameel-ks/unified-agent-control/main/install.sh | bash
+```
+
+This detects your distro (Debian/Ubuntu, Arch, or AppImage fallback) and installs the latest release.
+
+### Manual Download
+
+Download the latest `.deb`, `.pkg.tar.zst`, or `.AppImage` from the [Releases](https://github.com/muhammad-shameel-ks/unified-agent-control/releases) page.
+
+```bash
+# Debian/Ubuntu
+sudo dpkg -i unified-agent-control_*.deb
+
+# Arch Linux
+sudo pacman -U unified-agent-control-*.pkg.tar.zst
+
+# AppImage
+chmod +x unified-agent-control_*.AppImage
+./unified-agent-control_*.AppImage
+```
+
+## CLI Usage
+
+```bash
+uac              # Open the application
+uac <path>       # Open with a specific project directory (coming soon)
+uac update       # Update to the latest release from GitHub
+```
+
 ## Features
 
 - **Agent Dashboard** — View and manage OpenCode, Claude Code, and AGY agents with real-time status
@@ -23,7 +57,7 @@ A desktop application that serves as a centralized management hub for multiple A
 | Backend | Tauri v2 + Rust |
 | Package Manager | pnpm |
 
-## Getting Started
+## Building from Source
 
 ### Prerequisites
 
@@ -67,8 +101,10 @@ unified-agent-control/
 ├── src-tauri/              # Backend (Rust)
 │   └── src/
 │       ├── main.rs             # Entry point
-│       └── lib.rs              # Tauri commands (config I/O, migration, platform detection)
+│       ├── lib.rs              # Tauri commands (config I/O, migration, platform detection)
+│       └── updater.rs          # Self-update logic
 │
+├── install.sh              # Curl install script
 ├── public/icons/           # Agent brand assets
 └── package.json
 ```
@@ -79,6 +115,7 @@ Unified Agent Control reads and writes agent configuration files directly on dis
 
 - **OpenCode** — Reads `~/.config/opencode/opencode.json` (JSONC) and `skills/` directory
 - **Claude Code** — Reads `~/.claude.json` and `~/.claude/skills/`
+- **AGY (Gemini)** — Reads `~/.gemini/config/mcp_config.json` and `skills/`
 
 The app can migrate these configs into a centralized `~/.config/uac/` directory and create symlinks back to the original locations, letting you manage everything from one place while agents continue working normally.
 

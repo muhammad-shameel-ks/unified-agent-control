@@ -1,8 +1,19 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Mutex;
 use tauri::Manager;
+use tauri_plugin_cli::CliExt;
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+pub mod updater;
+
+static CLI_PATH: Mutex<Option<String>> = Mutex::new(None);
+
+#[tauri::command]
+fn get_cli_args() -> Result<Option<String>, String> {
+    let guard = CLI_PATH.lock().map_err(|e| e.to_string())?;
+    Ok(guard.clone())
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -733,10 +744,521 @@ fn toggle_claudecode_skill(id: String, enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgyConfigResponse {
+    config_dir: String,
+    mcp_servers: Vec<AgyMcpInfo>,
+    skills: Vec<AgySkillInfo>,
+    is_symlink: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgyMcpInfo {
+    name: String,
+    #[serde(rename = "type")]
+    mcp_type: String,
+    url: Option<String>,
+    command: Option<Vec<String>>,
+    env: Option<serde_json::Value>,
+    enabled: bool,
+    source_file: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgySkillInfo {
+    id: String,
+    name: String,
+    description: String,
+    path: String,
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct AgyMcpConfig {
+    #[serde(rename = "mcpServers")]
+    mcp_servers: Option<HashMap<String, AgyMcpEntry>>,
+}
+
+#[derive(Deserialize, Clone)]
+struct AgyMcpEntry {
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    env: Option<serde_json::Value>,
+    enabled: Option<bool>,
+    #[serde(rename = "serverUrl")]
+    server_url: Option<String>,
+    #[allow(dead_code)]
+    headers: Option<serde_json::Value>,
+}
+
+fn get_agy_skills(skills_dir: &str) -> Vec<AgySkillInfo> {
+    let mut skills = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(skills_dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    let folder_name = entry.file_name().to_string_lossy().into_owned();
+                    let is_disabled = folder_name.ends_with(".disabled");
+                    let clean_id = if is_disabled {
+                        folder_name[..folder_name.len() - ".disabled".len()].to_string()
+                    } else {
+                        folder_name.clone()
+                    };
+
+                    let skill_md_path = entry.path().join("SKILL.md");
+                    if skill_md_path.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&skill_md_path) {
+                            let mut name = clean_id.clone();
+                            let mut description = String::new();
+                            
+                            if content.starts_with("---") {
+                                if let Some(end_fm) = content[3..].find("---") {
+                                    let frontmatter = &content[3..3 + end_fm];
+                                    let mut in_description = false;
+                                    for line in frontmatter.lines() {
+                                        let trimmed = line.trim();
+                                        if trimmed.starts_with("name:") {
+                                            name = trimmed["name:".len()..].trim().trim_matches('"').trim_matches('\'').to_string();
+                                            in_description = false;
+                                        } else if trimmed.starts_with("description:") {
+                                            description = trimmed["description:".len()..].trim().trim_matches('"').trim_matches('\'').to_string();
+                                            in_description = true;
+                                        } else if in_description && !trimmed.is_empty() {
+                                            description.push_str(" ");
+                                            description.push_str(trimmed.trim_matches('"').trim_matches('\''));
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            skills.push(AgySkillInfo {
+                                id: clean_id,
+                                name,
+                                description,
+                                path: entry.path().to_string_lossy().into_owned(),
+                                enabled: !is_disabled,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    skills
+}
+
+#[tauri::command]
+fn get_agy_config() -> Result<AgyConfigResponse, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let config_dir = format!("{}/.gemini/config", home);
+    let mcp_json_path = format!("{}/mcp_config.json", config_dir);
+    let mut mcp_servers = Vec::new();
+
+    // Read mcp_config.json
+    if std::path::Path::new(&mcp_json_path).exists() {
+        if let Ok(content) = std::fs::read_to_string(&mcp_json_path) {
+            if !content.trim().is_empty() {
+                if let Ok(parsed) = serde_json::from_str::<AgyMcpConfig>(&content) {
+                    if let Some(mcp_map) = parsed.mcp_servers {
+                        for (name, entry) in mcp_map {
+                            if let Some(server_url) = entry.server_url.clone() {
+                                mcp_servers.push(AgyMcpInfo {
+                                    name,
+                                    mcp_type: "remote".to_string(),
+                                    url: Some(server_url),
+                                    command: None,
+                                    env: entry.env,
+                                    enabled: entry.enabled.unwrap_or(true),
+                                    source_file: "mcp_config.json".to_string(),
+                                });
+                            } else {
+                                let mut command_args = Vec::new();
+                                if let Some(cmd) = entry.command {
+                                    command_args.push(cmd);
+                                }
+                                if let Some(args) = entry.args {
+                                    command_args.extend(args);
+                                }
+                                mcp_servers.push(AgyMcpInfo {
+                                    name,
+                                    mcp_type: "command".to_string(),
+                                    url: None,
+                                    command: Some(command_args),
+                                    env: entry.env,
+                                    enabled: entry.enabled.unwrap_or(true),
+                                    source_file: "mcp_config.json".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let skills_dir = format!("{}/skills", config_dir);
+    let skills = get_agy_skills(&skills_dir);
+
+    let is_symlink = if let Ok(metadata) = std::fs::symlink_metadata(&config_dir) {
+        metadata.file_type().is_symlink()
+    } else {
+        false
+    };
+
+    Ok(AgyConfigResponse {
+        config_dir,
+        mcp_servers,
+        skills,
+        is_symlink,
+    })
+}
+
+#[tauri::command]
+fn migrate_agy_config() -> Result<String, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let old_dir_path = format!("{}/.gemini/config", home);
+    let uac_dir_path = format!("{}/.config/uac", home);
+    let new_dir_path = format!("{}/.config/uac/gemini-config", home);
+    let backup_dir_path = format!("{}/.gemini/config.bak", home);
+
+    let old_dir = std::path::Path::new(&old_dir_path);
+    let uac_dir = std::path::Path::new(&uac_dir_path);
+    let new_dir = std::path::Path::new(&new_dir_path);
+    let backup_dir = std::path::Path::new(&backup_dir_path);
+
+    // 1. Check if old config folder exists
+    if !old_dir.exists() {
+        std::fs::create_dir_all(new_dir).map_err(|e| format!("Failed to create UAC folder: {}", e))?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(new_dir, old_dir).map_err(|e| format!("Failed to create symlink: {}", e))?;
+        return Ok("Created new config directory and symlinked".to_string());
+    }
+
+    // 2. Check if it's already a symlink
+    if let Ok(metadata) = std::fs::symlink_metadata(old_dir) {
+        if metadata.file_type().is_symlink() {
+            return Ok("Already migrated and symlinked".to_string());
+        }
+    }
+
+    // 3. Create ~/.config/uac/ if not exists
+    if !uac_dir.exists() {
+        std::fs::create_dir_all(uac_dir).map_err(|e| format!("Failed to create ~/.config/uac: {}", e))?;
+    }
+
+    // 4. Handle backup
+    let final_backup_path = if backup_dir.exists() {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        format!("{}/.gemini/config.bak.{}", home, timestamp)
+    } else {
+        backup_dir_path.clone()
+    };
+    let final_backup = std::path::Path::new(&final_backup_path);
+
+    // 5. Copy old folder to new path
+    copy_dir_all(old_dir, new_dir).map_err(|e| format!("Failed to copy Gemini configs: {}", e))?;
+
+    // 6. Rename old to backup
+    std::fs::rename(old_dir, final_backup).map_err(|e| format!("Failed to backup Gemini configs: {}", e))?;
+
+    // 7. Symlink
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(new_dir, old_dir).map_err(|e| format!("Failed to create symlink: {}", e))?;
+
+    Ok(format!("Successfully migrated config to {} and created symlink", new_dir_path))
+}
+
+#[tauri::command]
+fn toggle_agy_mcp_server(name: String, source_file: String, enabled: bool) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let mcp_json_path = format!("{}/.gemini/config/{}", home, source_file);
+
+    // Read mcp_config.json
+    let content = if std::path::Path::new(&mcp_json_path).exists() {
+        std::fs::read_to_string(&mcp_json_path).map_err(|e| e.to_string())?
+    } else {
+        "{}".to_string()
+    };
+
+    let mut json_val: serde_json::Value = if content.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    };
+
+    // Ensure mcpServers exists
+    if json_val.get("mcpServers").is_none() {
+        json_val["mcpServers"] = serde_json::Value::Object(serde_json::Map::new());
+    }
+
+    if let Some(mcp) = json_val.get_mut("mcpServers") {
+        if let Some(server) = mcp.get_mut(&name) {
+            if let Some(server_obj) = server.as_object_mut() {
+                server_obj.insert("enabled".to_string(), serde_json::Value::Bool(enabled));
+            }
+        }
+    }
+
+    // Write back
+    let serialized = serde_json::to_string_pretty(&json_val).map_err(|e| e.to_string())?;
+    std::fs::write(&mcp_json_path, serialized).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn toggle_agy_skill(id: String, enabled: bool) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let skills_dir = format!("{}/.gemini/config/skills", home);
+
+    let current_path = if enabled {
+        format!("{}/{}.disabled", skills_dir, id)
+    } else {
+        format!("{}/{}", skills_dir, id)
+    };
+
+    let target_path = if enabled {
+        format!("{}/{}", skills_dir, id)
+    } else {
+        format!("{}/{}.disabled", skills_dir, id)
+    };
+
+    let current = std::path::Path::new(&current_path);
+    let target = std::path::Path::new(&target_path);
+
+    if current.exists() {
+        std::fs::rename(current, target).map_err(|e| format!("Failed to rename skill folder: {}", e))?;
+    }
+
+    Ok(())
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ShareMcpPayload {
+    name: String,
+    #[serde(rename = "type")]
+    mcp_type: Option<String>,
+    url: Option<String>,
+    command: Option<Vec<String>>,
+    env: Option<serde_json::Value>,
+    headers: Option<serde_json::Value>,
+    enabled: bool,
+}
+
+fn add_or_remove_opencode_mcp(name: &str, payload: &Option<ShareMcpPayload>, remove: bool) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let config_dir = format!("{}/.config/opencode", home);
+    let opencode_json_path = format!("{}/opencode.json", config_dir);
+
+    let content = if std::path::Path::new(&opencode_json_path).exists() {
+        std::fs::read_to_string(&opencode_json_path).map_err(|e| e.to_string())?
+    } else {
+        "{}".to_string()
+    };
+
+    let mut json_val: serde_json::Value = if content.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    };
+
+    if json_val.get("mcp").is_none() {
+        json_val["mcp"] = serde_json::Value::Object(serde_json::Map::new());
+    }
+
+    if let Some(mcp) = json_val.get_mut("mcp") {
+        if let Some(mcp_obj) = mcp.as_object_mut() {
+            if remove {
+                mcp_obj.remove(name);
+            } else if let Some(p) = payload {
+                let mut server_obj = serde_json::Map::new();
+                if let Some(ref url) = p.url {
+                    server_obj.insert("type".to_string(), serde_json::Value::String("remote".to_string()));
+                    server_obj.insert("url".to_string(), serde_json::Value::String(url.clone()));
+                    if let Some(ref headers) = p.headers {
+                        server_obj.insert("headers".to_string(), headers.clone());
+                    }
+                } else {
+                    server_obj.insert("type".to_string(), serde_json::Value::String("command".to_string()));
+                    if let Some(ref cmd) = p.command {
+                        server_obj.insert("command".to_string(), serde_json::to_value(cmd).unwrap_or(serde_json::Value::Null));
+                    }
+                }
+                if let Some(ref env) = p.env {
+                    server_obj.insert("env".to_string(), env.clone());
+                }
+                server_obj.insert("enabled".to_string(), serde_json::Value::Bool(p.enabled));
+                mcp_obj.insert(name.to_string(), serde_json::Value::Object(server_obj));
+            }
+        }
+    }
+
+    let serialized = serde_json::to_string_pretty(&json_val).map_err(|e| e.to_string())?;
+    std::fs::write(&opencode_json_path, serialized).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn add_or_remove_claudecode_mcp(name: &str, payload: &Option<ShareMcpPayload>, remove: bool) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let claude_json_path = format!("{}/.claude.json", home);
+
+    let content = if std::path::Path::new(&claude_json_path).exists() {
+        std::fs::read_to_string(&claude_json_path).map_err(|e| e.to_string())?
+    } else {
+        "{}".to_string()
+    };
+
+    let mut json_val: serde_json::Value = if content.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    };
+
+    if json_val.get("mcpServers").is_none() {
+        json_val["mcpServers"] = serde_json::Value::Object(serde_json::Map::new());
+    }
+
+    if let Some(mcp) = json_val.get_mut("mcpServers") {
+        if let Some(mcp_obj) = mcp.as_object_mut() {
+            if remove {
+                mcp_obj.remove(name);
+            } else if let Some(p) = payload {
+                let mut server_obj = serde_json::Map::new();
+                if let Some(ref cmd_arr) = p.command {
+                    if !cmd_arr.is_empty() {
+                        server_obj.insert("command".to_string(), serde_json::Value::String(cmd_arr[0].clone()));
+                        let args: Vec<String> = cmd_arr[1..].to_vec();
+                        server_obj.insert("args".to_string(), serde_json::to_value(args).unwrap_or(serde_json::Value::Null));
+                    }
+                }
+                if let Some(ref env) = p.env {
+                    server_obj.insert("env".to_string(), env.clone());
+                }
+                server_obj.insert("disabled".to_string(), serde_json::Value::Bool(!p.enabled));
+                mcp_obj.insert(name.to_string(), serde_json::Value::Object(server_obj));
+            }
+        }
+    }
+
+    let serialized = serde_json::to_string_pretty(&json_val).map_err(|e| e.to_string())?;
+    std::fs::write(&claude_json_path, serialized).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn add_or_remove_agy_mcp(name: &str, payload: &Option<ShareMcpPayload>, remove: bool) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let mcp_json_path = format!("{}/.gemini/config/mcp_config.json", home);
+
+    let content = if std::path::Path::new(&mcp_json_path).exists() {
+        std::fs::read_to_string(&mcp_json_path).map_err(|e| e.to_string())?
+    } else {
+        "{}".to_string()
+    };
+
+    let mut json_val: serde_json::Value = if content.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    };
+
+    if json_val.get("mcpServers").is_none() {
+        json_val["mcpServers"] = serde_json::Value::Object(serde_json::Map::new());
+    }
+
+    if let Some(mcp) = json_val.get_mut("mcpServers") {
+        if let Some(mcp_obj) = mcp.as_object_mut() {
+            if remove {
+                mcp_obj.remove(name);
+            } else if let Some(p) = payload {
+                let mut server_obj = serde_json::Map::new();
+                if let Some(ref url) = p.url {
+                    server_obj.insert("serverUrl".to_string(), serde_json::Value::String(url.clone()));
+                    if let Some(ref headers) = p.headers {
+                        server_obj.insert("headers".to_string(), headers.clone());
+                    }
+                } else if let Some(ref cmd_arr) = p.command {
+                    if !cmd_arr.is_empty() {
+                        server_obj.insert("command".to_string(), serde_json::Value::String(cmd_arr[0].clone()));
+                        let args: Vec<String> = cmd_arr[1..].to_vec();
+                        server_obj.insert("args".to_string(), serde_json::to_value(args).unwrap_or(serde_json::Value::Null));
+                    }
+                }
+                if let Some(ref env) = p.env {
+                    server_obj.insert("env".to_string(), env.clone());
+                }
+                server_obj.insert("enabled".to_string(), serde_json::Value::Bool(p.enabled));
+                mcp_obj.insert(name.to_string(), serde_json::Value::Object(server_obj));
+            }
+        }
+    }
+
+    let serialized = serde_json::to_string_pretty(&json_val).map_err(|e| e.to_string())?;
+    std::fs::write(&mcp_json_path, serialized).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn share_mcp_server(source_agent: String, payload: ShareMcpPayload, share: bool) -> Result<(), String> {
+    let name = payload.name.clone();
+    if share {
+        if source_agent != "OpenCode" {
+            add_or_remove_opencode_mcp(&name, &Some(payload.clone()), false)?;
+        }
+        if source_agent != "ClaudeCode" {
+            add_or_remove_claudecode_mcp(&name, &Some(payload.clone()), false)?;
+        }
+        if source_agent != "AGY" {
+            add_or_remove_agy_mcp(&name, &Some(payload.clone()), false)?;
+        }
+    } else {
+        if source_agent != "OpenCode" {
+            add_or_remove_opencode_mcp(&name, &None, true)?;
+        }
+        if source_agent != "ClaudeCode" {
+            add_or_remove_claudecode_mcp(&name, &None, true)?;
+        }
+        if source_agent != "AGY" {
+            add_or_remove_agy_mcp(&name, &None, true)?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn register_mcp_on_agent(agent_id: String, payload: ShareMcpPayload, register: bool) -> Result<(), String> {
+    let name = payload.name.clone();
+    if register {
+        if agent_id == "OpenCode" {
+            add_or_remove_opencode_mcp(&name, &Some(payload), false)?;
+        } else if agent_id == "ClaudeCode" {
+            add_or_remove_claudecode_mcp(&name, &Some(payload), false)?;
+        } else if agent_id == "AGY" {
+            add_or_remove_agy_mcp(&name, &Some(payload), false)?;
+        }
+    } else {
+        if agent_id == "OpenCode" {
+            add_or_remove_opencode_mcp(&name, &None, true)?;
+        } else if agent_id == "ClaudeCode" {
+            add_or_remove_claudecode_mcp(&name, &None, true)?;
+        } else if agent_id == "AGY" {
+            add_or_remove_agy_mcp(&name, &None, true)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_cli::init())
         .setup(|app| {
             #[cfg(target_os = "linux")]
             {
@@ -744,6 +1266,25 @@ pub fn run() {
                     let _ = window.set_decorations(false);
                 }
             }
+
+            // Parse CLI arguments
+            if let Ok(matches) = app.cli().matches() {
+                if let Some(path_arg) = matches.args.get("path") {
+                    if let Some(value) = path_arg.value.as_str() {
+                        let path = if value == "." {
+                            std::env::current_dir()
+                                .map(|p| p.to_string_lossy().into_owned())
+                                .unwrap_or_else(|_| value.to_string())
+                        } else {
+                            value.to_string()
+                        };
+                        if let Ok(mut cli_path) = CLI_PATH.lock() {
+                            *cli_path = Some(path);
+                        }
+                    }
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -756,7 +1297,14 @@ pub fn run() {
             get_claudecode_config,
             migrate_claudecode_config,
             toggle_claudecode_mcp_server,
-            toggle_claudecode_skill
+            toggle_claudecode_skill,
+            get_agy_config,
+            migrate_agy_config,
+            toggle_agy_mcp_server,
+            toggle_agy_skill,
+            share_mcp_server,
+            register_mcp_on_agent,
+            get_cli_args
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

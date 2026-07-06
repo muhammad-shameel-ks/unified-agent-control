@@ -19,6 +19,8 @@ import { MorphingModal } from "@/components/motion/morphing-modal";
 import { Switch } from "@/components/motion/switch";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/motion/tabs";
 import { Loader } from "@/components/motion/loader";
+import { Checkbox } from "@/components/motion/checkbox";
+import { registerMcpOnAllAgents, type McpServerPayload } from "@/lib/mcpActions";
 
 interface DashboardProps {
   onNavigateToSettings: () => void;
@@ -92,53 +94,82 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
     isSymlink: boolean;
   }
 
+  interface AgyConfig {
+    configDir: string;
+    mcpServers: Array<{
+      name: string;
+      type: string;
+      url?: string;
+      command?: string[];
+      env?: any;
+      enabled: boolean;
+      sourceFile: string;
+    }>;
+    skills: Array<{
+      id: string;
+      name: string;
+      description: string;
+      path: string;
+      enabled: boolean;
+    }>;
+    isSymlink: boolean;
+  }
+
   const [opencodeConfig, setOpencodeConfig] = useState<OpenCodeConfig | null>(null);
   const [claudecodeConfig, setClaudecodeConfig] = useState<ClaudeCodeConfig | null>(null);
+  const [agyConfig, setAgyConfig] = useState<AgyConfig | null>(null);
 
-  const fetchConfig = () => {
-    if (activeAgentModalId === "OpenCode") {
-      invoke<any>("get_opencode_config")
-        .then((data) => {
-          const mappedSkills = (data.skills || []).map((sk: any) => ({
-            ...sk,
-            enabled: sk.enabled
-          }));
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const fetchConfig = (silent = false) => {
+    if (silent) setIsRefreshing(true);
+    const finish = () => { if (silent) setIsRefreshing(false); };
+    Promise.all([
+      invoke<any>("get_opencode_config").catch(() => null),
+      invoke<any>("get_claudecode_config").catch(() => null),
+      invoke<any>("get_agy_config").catch(() => null),
+    ])
+      .then(([openVal, claudeVal, agyVal]) => {
+        if (openVal) {
           setOpencodeConfig({
-            configDir: data.configDir,
-            mcpServers: data.mcpServers,
-            skills: mappedSkills,
-            isSymlink: data.isSymlink
+            configDir: openVal.configDir,
+            mcpServers: openVal.mcpServers,
+            skills: openVal.skills,
+            isSymlink: openVal.isSymlink,
           });
-        })
-        .catch((err) => console.error("Failed to load OpenCode config:", err));
-    } else if (activeAgentModalId === "ClaudeCode") {
-      invoke<any>("get_claudecode_config")
-        .then((data) => {
-          const mappedSkills = (data.skills || []).map((sk: any) => ({
-            ...sk,
-            enabled: sk.enabled
-          }));
+        }
+        if (claudeVal) {
           setClaudecodeConfig({
-            configDir: data.configDir,
-            mcpServers: data.mcpServers,
-            skills: mappedSkills,
-            isSymlink: data.isSymlink
+            configDir: claudeVal.configDir,
+            mcpServers: claudeVal.mcpServers,
+            skills: claudeVal.skills,
+            isSymlink: claudeVal.isSymlink,
           });
-        })
-        .catch((err) => console.error("Failed to load Claude Code config:", err));
-    }
+        }
+        if (agyVal) {
+          setAgyConfig({
+            configDir: agyVal.configDir,
+            mcpServers: agyVal.mcpServers,
+            skills: agyVal.skills,
+            isSymlink: agyVal.isSymlink,
+          });
+        }
+      })
+      .finally(finish);
   };
 
   useEffect(() => {
-    if (activeAgentModalId === "OpenCode" || activeAgentModalId === "ClaudeCode") {
+    if (activeAgentModalId === "OpenCode" || activeAgentModalId === "ClaudeCode" || activeAgentModalId === "AGY") {
       fetchConfig();
-      window.addEventListener("focus", fetchConfig);
+      const handleFocus = () => fetchConfig(true);
+      window.addEventListener("focus", handleFocus);
       return () => {
-        window.removeEventListener("focus", fetchConfig);
+        window.removeEventListener("focus", handleFocus);
       };
     } else {
       setOpencodeConfig(null);
       setClaudecodeConfig(null);
+      setAgyConfig(null);
     }
   }, [activeAgentModalId]);
 
@@ -199,6 +230,39 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
       }).catch((err) => {
         console.error("Failed to sync Claude Code MCP toggle:", err);
         setClaudecodeConfig((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            mcpServers: prev.mcpServers.map((s) => {
+              if (s.name === serverName) return { ...s, enabled: !nextState };
+              return s;
+            }),
+          };
+        });
+      });
+    } else if (activeAgentModalId === "AGY" && agyConfig) {
+      const server = agyConfig.mcpServers.find((s) => s.name === serverName);
+      if (!server) return;
+      const nextState = !server.enabled;
+
+      setAgyConfig((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          mcpServers: prev.mcpServers.map((s) => {
+            if (s.name === serverName) return { ...s, enabled: nextState };
+            return s;
+          }),
+        };
+      });
+
+      invoke("toggle_agy_mcp_server", {
+        name: serverName,
+        sourceFile: server.sourceFile,
+        enabled: nextState,
+      }).catch((err) => {
+        console.error("Failed to sync AGY MCP toggle:", err);
+        setAgyConfig((prev) => {
           if (!prev) return null;
           return {
             ...prev,
@@ -277,6 +341,38 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
           };
         });
       });
+    } else if (activeAgentModalId === "AGY" && agyConfig) {
+      const skill = agyConfig.skills.find((s) => s.id === skillId);
+      if (!skill) return;
+      const nextState = !skill.enabled;
+
+      setAgyConfig((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          skills: prev.skills.map((s) => {
+            if (s.id === skillId) return { ...s, enabled: nextState };
+            return s;
+          }),
+        };
+      });
+
+      invoke("toggle_agy_skill", {
+        id: skillId,
+        enabled: nextState,
+      }).catch((err) => {
+        console.error("Failed to sync AGY Skill toggle:", err);
+        setAgyConfig((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            skills: prev.skills.map((s) => {
+              if (s.id === skillId) return { ...s, enabled: !nextState };
+              return s;
+            }),
+          };
+        });
+      });
     }
   };
 
@@ -338,6 +434,52 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
           console.error("Migration failed:", err);
           setIsMigrating(false);
         });
+    } else if (activeAgentModalId === "AGY") {
+      invoke<string>("migrate_agy_config")
+        .then((msg) => {
+          console.log(msg);
+          invoke<any>("get_agy_config")
+            .then((data) => {
+              const mappedSkills = (data.skills || []).map((sk: any) => ({
+                ...sk,
+                enabled: sk.enabled,
+              }));
+              setAgyConfig({
+                configDir: data.configDir,
+                mcpServers: data.mcpServers,
+                skills: mappedSkills,
+                isSymlink: data.isSymlink,
+              });
+            })
+            .finally(() => setIsMigrating(false));
+        })
+        .catch((err) => {
+          console.error("Migration failed:", err);
+          setIsMigrating(false);
+        });
+    }
+  };
+
+  const isGloballyShared = (name: string) => {
+    const inOpenCode = opencodeConfig?.mcpServers.some((s) => s.name === name) ?? false;
+    const inClaudeCode = claudecodeConfig?.mcpServers.some((s) => s.name === name) ?? false;
+    const inAgy = agyConfig?.mcpServers.some((s) => s.name === name) ?? false;
+
+    let count = 0;
+    if (inOpenCode) count++;
+    if (inClaudeCode) count++;
+    if (inAgy) count++;
+
+    return count > 1;
+  };
+
+  const handleToggleShareGlobally = async (srv: McpServerPayload, checked: boolean) => {
+    if (!activeAgentModalId) return;
+    try {
+      await registerMcpOnAllAgents(srv, activeAgentModalId, checked);
+      fetchConfig(true);
+    } catch (err) {
+      console.error("Failed to share MCP server globally:", err);
     }
   };
 
@@ -796,9 +938,12 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
 
               {/* Agent Settings Form */}
               <div className="w-full text-left space-y-4 border-t border-b border-border/40 py-4 my-2 max-h-[60vh] overflow-y-auto pr-1">
-                {agent.id === "OpenCode" || agent.id === "ClaudeCode" ? (
+                {agent.id === "OpenCode" || agent.id === "ClaudeCode" || agent.id === "AGY" ? (
                   (() => {
-                    const currentAgentConfig = agent.id === "OpenCode" ? opencodeConfig : claudecodeConfig;
+                    const currentAgentConfig = 
+                      agent.id === "OpenCode" ? opencodeConfig :
+                      agent.id === "ClaudeCode" ? claudecodeConfig :
+                      agyConfig;
                     return (
                       <div className="space-y-4">
                         <div className="space-y-2">
@@ -854,11 +999,11 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
                             </div>
                             <button
                               type="button"
-                              onClick={fetchConfig}
+                              onClick={() => fetchConfig()}
                               title="Refresh configuration"
                               className="pb-2 pt-0 px-2 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                             >
-                              <RefreshCw className="h-3.5 w-3.5" />
+                              <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
                             </button>
                           </TabsList>
 
@@ -866,11 +1011,11 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
                             {currentAgentConfig ? (
                               currentAgentConfig.mcpServers.length > 0 ? (
                                 <div className="space-y-2">
-                                  {currentAgentConfig.mcpServers.map((srv, idx) => {
+                                  {currentAgentConfig.mcpServers.map((srv) => {
                                     const isExpanded = !!expandedItems[`mcp-${srv.name}`];
                                     return (
-                                      <div 
-                                        key={idx} 
+                                      <div
+                                        key={srv.name}
                                         onClick={() => toggleItemExpanded(`mcp-${srv.name}`)}
                                         className="flex flex-col p-3 rounded-xl border border-border/60 bg-background/50 text-xs gap-1.5 hover:border-primary/20 transition-all duration-150 cursor-pointer text-left"
                                       >
@@ -882,7 +1027,10 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
                                               {srv.sourceFile}
                                             </span>
                                           </div>
-                                          <div onClick={(e) => e.stopPropagation()}>
+                                          <div className="flex items-center gap-2.5" onClick={(e) => e.stopPropagation()}>
+                                            <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                              Active state
+                                            </span>
                                             <Switch
                                               checked={srv.enabled}
                                               onCheckedChange={() => handleToggleMcpEnable(srv.name)}
@@ -907,6 +1055,51 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
                                                 Env: {JSON.stringify(srv.env)}
                                               </div>
                                             )}
+
+                                            <div className="flex items-center gap-2 pt-2 mt-2 border-t border-border/10">
+                                              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wider shrink-0">Active in:</span>
+                                              {([
+                                                { id: "OpenCode", cfg: opencodeConfig },
+                                                { id: "ClaudeCode", cfg: claudecodeConfig },
+                                                { id: "AGY", cfg: agyConfig },
+                                              ] as const).map(({ id, cfg }) => {
+                                                const peer = cfg?.mcpServers.find((p) => p.name === srv.name);
+                                                if (!peer) {
+                                                  return (
+                                                    <span
+                                                      key={id}
+                                                      className="inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded border border-border/40 text-muted-foreground/60 bg-secondary/20"
+                                                      title={`Not registered in ${id}`}
+                                                    >
+                                                      {id} —
+                                                    </span>
+                                                  );
+                                                }
+                                                const isCurrent = id === activeAgentModalId;
+                                                return (
+                                                  <span
+                                                    key={id}
+                                                    className={`inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded border ${
+                                                      peer.enabled
+                                                        ? "border-emerald-500/30 text-emerald-400 bg-emerald-500/10"
+                                                        : "border-amber-500/30 text-amber-400 bg-amber-500/10"
+                                                    } ${isCurrent ? "ring-1 ring-primary/40" : ""}`}
+                                                    title={`${id}: ${peer.enabled ? "enabled" : "disabled"}${isCurrent ? " (this agent)" : ""}`}
+                                                  >
+                                                    {id} {peer.enabled ? "On" : "Off"}
+                                                  </span>
+                                                );
+                                              })}
+                                            </div>
+
+                                            <div className="flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
+                                              <Checkbox
+                                                checked={isGloballyShared(srv.name)}
+                                                onCheckedChange={(checked) => handleToggleShareGlobally(srv, checked)}
+                                                className="scale-90 origin-left"
+                                                label="Share Globally"
+                                              />
+                                            </div>
                                           </div>
                                         )}
                                       </div>
@@ -930,11 +1123,11 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
                             {currentAgentConfig ? (
                               currentAgentConfig.skills.length > 0 ? (
                                 <div className="space-y-2">
-                                  {currentAgentConfig.skills.map((sk, idx) => {
+                                  {currentAgentConfig.skills.map((sk) => {
                                     const isExpanded = !!expandedItems[`skill-${sk.id}`];
                                     return (
-                                      <div 
-                                        key={idx} 
+                                      <div
+                                        key={sk.id}
                                         onClick={() => toggleItemExpanded(`skill-${sk.id}`)}
                                         className="flex flex-col p-3 rounded-xl border border-border/60 bg-background/50 text-xs gap-1.5 hover:border-primary/20 transition-all duration-150 cursor-pointer text-left"
                                       >

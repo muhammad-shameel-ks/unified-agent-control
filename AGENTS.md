@@ -45,3 +45,31 @@ pnpm tauri build  # Tauri production build
 
 - No test runner, linter, or formatter is configured yet.
 - No CI workflows or pre-commit hooks exist.
+
+## What we understand & have implemented
+
+### Unified Agent Syncing & Symlinking
+- All agent preferences, global configurations, and custom skill folders are managed via UAC configuration mapping folders under the user's home configuration directory:
+  - **OpenCode**: Configured globally in `~/.config/opencode/opencode.json` (or `opencode.jsonc`). Path is symlinked to `~/.config/uac/opencode-config` during migration.
+  - **Claude Code**: Configured globally in `~/.claude.json` and custom skills in `~/.claude/skills/`. Migrated to `~/.config/uac/claude-config` and symlinked atomically at `~/.claude`.
+  - **Antigravity CLI (AGY)**: Configured globally in `~/.gemini/config/mcp_config.json` and custom skills in `~/.gemini/config/skills/`. Migrated to `~/.config/uac/gemini-config` and symlinked at `~/.gemini/config`.
+
+### Model Context Protocol (MCP) Sharing & Synchronization
+- Commands split array logic:
+  - OpenCode maps command arguments as a single unified array: `["npx", "-y", "@server"]`.
+  - Claude Code and Antigravity split commands into a binary field `"command": "npx"` and parameters `"args": ["-y", "@server"]`.
+- State mappings:
+  - OpenCode: `"enabled": true/false`.
+  - Claude Code: `"disabled": false/true`.
+  - Antigravity: `"enabled": true/false`.
+- Backend commands `share_mcp_server` and `register_mcp_on_agent` convert these formats in-memory dynamically when sharing or toggling registrations across agents in the dashboard.
+
+### Skills Disabling Strategy
+- Both Claude Code and AGY do not natively support an `enabled: false` setting flag on individual custom skills directories.
+- To handle this cleanly and robustly, UAC renames the skill folder between `id` (active) and `id.disabled` (inactive) in the backend. When Claude Code or AGY scans the directories, inactive skills are transparently ignored.
+
+### Key UX Components Installed
+- `@beui/loader` (helix progress spinner variant).
+- `@beui/checkbox` (custom motion checkbox wrapper used in the matrix).
+- Window focus listeners automatically query the active agent's configuration from the disk, allowing instant updates if settings are modified outside UAC.
+- Escape (`Esc`) key listener is bound to `<MorphingModal>` to automatically close all opened configurations.

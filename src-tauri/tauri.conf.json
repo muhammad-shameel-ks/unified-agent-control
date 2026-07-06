@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "unified-agent-control",
+        "title": "Unified Agent Control",
         "width": 800,
         "height": 600
       }
@@ -31,6 +31,30 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libappindicator3-1", "librsvg2-0", "patchelf"]
+      }
+    }
+  },
+  "plugins": {
+    "cli": {
+      "description": "Unified Agent Control - manage AI coding agents",
+      "args": [
+        {
+          "name": "path",
+          "index": 1,
+          "takesValue": true,
+          "description": "Project directory to open (e.g. '.' for current directory)",
+          "required": false
+        }
+      ],
+      "subcommands": {
+        "update": {
+          "description": "Update to the latest release from GitHub"
+        }
+      }
+    }
   }
 }
