@@ -9,7 +9,8 @@ import {
   Terminal, 
   Sparkles,
   Settings,
-  ChevronDown
+  ChevronDown,
+  RefreshCw
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "motion/react";
@@ -17,6 +18,7 @@ import { Button } from "@/components/motion/button/base";
 import { MorphingModal } from "@/components/motion/morphing-modal";
 import { Switch } from "@/components/motion/switch";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/motion/tabs";
+import { Loader } from "@/components/motion/loader";
 
 interface DashboardProps {
   onNavigateToSettings: () => void;
@@ -66,60 +68,218 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
       path: string;
       enabled: boolean;
     }>;
+    isSymlink: boolean;
+  }
+
+  interface ClaudeCodeConfig {
+    configDir: string;
+    mcpServers: Array<{
+      name: string;
+      type: string;
+      url?: string;
+      command?: string[];
+      env?: any;
+      enabled: boolean;
+      sourceFile: string;
+    }>;
+    skills: Array<{
+      id: string;
+      name: string;
+      description: string;
+      path: string;
+      enabled: boolean;
+    }>;
+    isSymlink: boolean;
   }
 
   const [opencodeConfig, setOpencodeConfig] = useState<OpenCodeConfig | null>(null);
+  const [claudecodeConfig, setClaudecodeConfig] = useState<ClaudeCodeConfig | null>(null);
 
-  useEffect(() => {
+  const fetchConfig = () => {
     if (activeAgentModalId === "OpenCode") {
       invoke<any>("get_opencode_config")
         .then((data) => {
           const mappedSkills = (data.skills || []).map((sk: any) => ({
             ...sk,
-            enabled: true
+            enabled: sk.enabled
           }));
           setOpencodeConfig({
-            ...data,
-            skills: mappedSkills
+            configDir: data.configDir,
+            mcpServers: data.mcpServers,
+            skills: mappedSkills,
+            isSymlink: data.isSymlink
           });
         })
         .catch((err) => console.error("Failed to load OpenCode config:", err));
+    } else if (activeAgentModalId === "ClaudeCode") {
+      invoke<any>("get_claudecode_config")
+        .then((data) => {
+          const mappedSkills = (data.skills || []).map((sk: any) => ({
+            ...sk,
+            enabled: sk.enabled
+          }));
+          setClaudecodeConfig({
+            configDir: data.configDir,
+            mcpServers: data.mcpServers,
+            skills: mappedSkills,
+            isSymlink: data.isSymlink
+          });
+        })
+        .catch((err) => console.error("Failed to load Claude Code config:", err));
+    }
+  };
+
+  useEffect(() => {
+    if (activeAgentModalId === "OpenCode" || activeAgentModalId === "ClaudeCode") {
+      fetchConfig();
+      window.addEventListener("focus", fetchConfig);
+      return () => {
+        window.removeEventListener("focus", fetchConfig);
+      };
     } else {
       setOpencodeConfig(null);
+      setClaudecodeConfig(null);
     }
   }, [activeAgentModalId]);
 
   const handleToggleMcpEnable = (serverName: string) => {
-    if (!opencodeConfig) return;
-    setOpencodeConfig((prev) => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        mcpServers: prev.mcpServers.map((s) => {
-          if (s.name === serverName) {
-            return { ...s, enabled: !s.enabled };
-          }
-          return s;
-        }),
-      };
-    });
+    if (activeAgentModalId === "OpenCode" && opencodeConfig) {
+      const server = opencodeConfig.mcpServers.find((s) => s.name === serverName);
+      if (!server) return;
+      const nextState = !server.enabled;
+
+      setOpencodeConfig((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          mcpServers: prev.mcpServers.map((s) => {
+            if (s.name === serverName) return { ...s, enabled: nextState };
+            return s;
+          }),
+        };
+      });
+
+      invoke("toggle_mcp_server", {
+        name: serverName,
+        sourceFile: server.sourceFile,
+        enabled: nextState,
+      }).catch((err) => {
+        console.error("Failed to sync MCP toggle:", err);
+        setOpencodeConfig((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            mcpServers: prev.mcpServers.map((s) => {
+              if (s.name === serverName) return { ...s, enabled: !nextState };
+              return s;
+            }),
+          };
+        });
+      });
+    } else if (activeAgentModalId === "ClaudeCode" && claudecodeConfig) {
+      const server = claudecodeConfig.mcpServers.find((s) => s.name === serverName);
+      if (!server) return;
+      const nextState = !server.enabled;
+
+      setClaudecodeConfig((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          mcpServers: prev.mcpServers.map((s) => {
+            if (s.name === serverName) return { ...s, enabled: nextState };
+            return s;
+          }),
+        };
+      });
+
+      invoke("toggle_claudecode_mcp_server", {
+        name: serverName,
+        sourceFile: server.sourceFile,
+        enabled: nextState,
+      }).catch((err) => {
+        console.error("Failed to sync Claude Code MCP toggle:", err);
+        setClaudecodeConfig((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            mcpServers: prev.mcpServers.map((s) => {
+              if (s.name === serverName) return { ...s, enabled: !nextState };
+              return s;
+            }),
+          };
+        });
+      });
+    }
   };
 
   const handleToggleSkillEnable = (skillId: string) => {
-    if (!opencodeConfig) return;
-    setOpencodeConfig((prev) => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        skills: prev.skills.map((s) => {
-          if (s.id === skillId) {
-            return { ...s, enabled: !s.enabled };
-          }
-          return s;
-        }),
-      };
-    });
+    if (activeAgentModalId === "OpenCode" && opencodeConfig) {
+      const skill = opencodeConfig.skills.find((s) => s.id === skillId);
+      if (!skill) return;
+      const nextState = !skill.enabled;
+
+      setOpencodeConfig((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          skills: prev.skills.map((s) => {
+            if (s.id === skillId) return { ...s, enabled: nextState };
+            return s;
+          }),
+        };
+      });
+
+      invoke("toggle_skill", {
+        name: skill.name.toLowerCase(),
+        enabled: nextState,
+      }).catch((err) => {
+        console.error("Failed to sync Skill toggle:", err);
+        setOpencodeConfig((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            skills: prev.skills.map((s) => {
+              if (s.id === skillId) return { ...s, enabled: !nextState };
+              return s;
+            }),
+          };
+        });
+      });
+    } else if (activeAgentModalId === "ClaudeCode" && claudecodeConfig) {
+      const skill = claudecodeConfig.skills.find((s) => s.id === skillId);
+      if (!skill) return;
+      const nextState = !skill.enabled;
+
+      setClaudecodeConfig((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          skills: prev.skills.map((s) => {
+            if (s.id === skillId) return { ...s, enabled: nextState };
+            return s;
+          }),
+        };
+      });
+
+      invoke("toggle_claudecode_skill", {
+        id: skillId,
+        enabled: nextState,
+      }).catch((err) => {
+        console.error("Failed to sync Claude Code Skill toggle:", err);
+        setClaudecodeConfig((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            skills: prev.skills.map((s) => {
+              if (s.id === skillId) return { ...s, enabled: !nextState };
+              return s;
+            }),
+          };
+        });
+      });
+    }
   };
+
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
 
   const toggleItemExpanded = (id: string) => {
@@ -127,6 +287,58 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
       ...prev,
       [id]: !prev[id],
     }));
+  };
+  const [isMigrating, setIsMigrating] = useState(false);
+
+  const handleMigrateConfig = () => {
+    setIsMigrating(true);
+    if (activeAgentModalId === "OpenCode") {
+      invoke<string>("migrate_opencode_config")
+        .then((msg) => {
+          console.log(msg);
+          invoke<any>("get_opencode_config")
+            .then((data) => {
+              const mappedSkills = (data.skills || []).map((sk: any) => ({
+                ...sk,
+                enabled: sk.enabled,
+              }));
+              setOpencodeConfig({
+                configDir: data.configDir,
+                mcpServers: data.mcpServers,
+                skills: mappedSkills,
+                isSymlink: data.isSymlink,
+              });
+            })
+            .finally(() => setIsMigrating(false));
+        })
+        .catch((err) => {
+          console.error("Migration failed:", err);
+          setIsMigrating(false);
+        });
+    } else if (activeAgentModalId === "ClaudeCode") {
+      invoke<string>("migrate_claudecode_config")
+        .then((msg) => {
+          console.log(msg);
+          invoke<any>("get_claudecode_config")
+            .then((data) => {
+              const mappedSkills = (data.skills || []).map((sk: any) => ({
+                ...sk,
+                enabled: sk.enabled,
+              }));
+              setClaudecodeConfig({
+                configDir: data.configDir,
+                mcpServers: data.mcpServers,
+                skills: mappedSkills,
+                isSymlink: data.isSymlink,
+              });
+            })
+            .finally(() => setIsMigrating(false));
+        })
+        .catch((err) => {
+          console.error("Migration failed:", err);
+          setIsMigrating(false);
+        });
+    }
   };
 
   // Initial Mock Data
@@ -584,147 +796,195 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
 
               {/* Agent Settings Form */}
               <div className="w-full text-left space-y-4 border-t border-b border-border/40 py-4 my-2 max-h-[60vh] overflow-y-auto pr-1">
-                {agent.id === "OpenCode" ? (
-                  <div className="space-y-4">
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                        <Folder className="h-3.5 w-3.5 text-primary" />
-                        Global Config Location
-                      </div>
-                      <div className="text-xs font-mono bg-secondary/50 border border-border/40 p-2.5 rounded-xl break-all select-all">
-                        {opencodeConfig ? opencodeConfig.configDir : "Loading..."}
-                      </div>
-                    </div>
-
-                    <Tabs defaultValue="mcp" variant="underline" className="w-full mt-2">
-                      <TabsList className="w-full justify-start border-b border-border/40 pb-0 gap-2 mb-4">
-                        <TabsTrigger value="mcp" className="pb-2 pt-0 -mb-px text-[11px] font-bold uppercase tracking-wider">
-                          MCP Servers ({opencodeConfig?.mcpServers.length ?? 0})
-                        </TabsTrigger>
-                        <TabsTrigger value="skills" className="pb-2 pt-0 -mb-px text-[11px] font-bold uppercase tracking-wider">
-                          Skills ({opencodeConfig?.skills.length ?? 0})
-                        </TabsTrigger>
-                      </TabsList>
-
-                      <TabsContent value="mcp" className="space-y-3 mt-0">
-                        {opencodeConfig ? (
-                          opencodeConfig.mcpServers.length > 0 ? (
-                            <div className="space-y-2">
-                              {opencodeConfig.mcpServers.map((srv, idx) => {
-                                const isExpanded = !!expandedItems[`mcp-${srv.name}`];
-                                return (
-                                  <div 
-                                    key={idx} 
-                                    onClick={() => toggleItemExpanded(`mcp-${srv.name}`)}
-                                    className="flex flex-col p-3 rounded-xl border border-border/60 bg-background/50 text-xs gap-1.5 hover:border-primary/20 transition-all duration-150 cursor-pointer text-left"
-                                  >
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center gap-2">
-                                        <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? "rotate-0" : "-rotate-90"}`} />
-                                        <span className="font-bold text-foreground">{srv.name}</span>
-                                        <span className="text-[9px] font-mono font-bold bg-secondary px-1.5 py-0.5 rounded text-muted-foreground uppercase">
-                                          {srv.sourceFile}
-                                        </span>
-                                      </div>
-                                      <div onClick={(e) => e.stopPropagation()}>
-                                        <Switch
-                                          checked={srv.enabled}
-                                          onCheckedChange={() => handleToggleMcpEnable(srv.name)}
-                                        />
-                                      </div>
-                                    </div>
-                                    
-                                    {isExpanded && (
-                                      <div className="mt-1 space-y-1.5 border-t border-border/20 pt-2 animate-in fade-in slide-in-from-top-1 duration-200">
-                                        {srv.type === "remote" ? (
-                                          <div className="text-[10px] font-mono text-muted-foreground break-all">
-                                            URL: <span className="text-primary/95">{srv.url}</span>
-                                          </div>
-                                        ) : (
-                                          <div className="text-[10px] font-mono text-muted-foreground break-all">
-                                            Command: <span className="text-foreground">{srv.command?.join(" ")}</span>
-                                          </div>
-                                        )}
-
-                                        {srv.env && Object.keys(srv.env).length > 0 && (
-                                          <div className="text-[9px] font-mono text-muted-foreground bg-secondary/30 p-1.5 rounded-lg border border-border/20">
-                                            Env: {JSON.stringify(srv.env)}
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
+                {agent.id === "OpenCode" || agent.id === "ClaudeCode" ? (
+                  (() => {
+                    const currentAgentConfig = agent.id === "OpenCode" ? opencodeConfig : claudecodeConfig;
+                    return (
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                              <Folder className="h-3.5 w-3.5 text-primary" />
+                              Global Config Location
                             </div>
-                          ) : (
-                            <p className="text-xs text-muted-foreground italic text-center py-4 border border-dashed border-border rounded-xl">
-                              No MCP servers found in global config.
-                            </p>
-                          )
-                        ) : (
-                          <div className="flex justify-center items-center py-6">
-                            <span className="text-xs text-muted-foreground animate-pulse">Loading configs...</span>
+                            {currentAgentConfig && (
+                              currentAgentConfig.isSymlink ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                  ✓ Synced via UAC
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                  ⚠ Legacy Path
+                                </span>
+                              )
+                            )}
                           </div>
-                        )}
-                      </TabsContent>
+                          <div className="text-xs font-mono bg-secondary/50 border border-border/40 p-2.5 rounded-xl break-all select-all flex items-center justify-between gap-3">
+                            <span className="truncate">{currentAgentConfig ? currentAgentConfig.configDir : "Loading..."}</span>
+                            {currentAgentConfig && !currentAgentConfig.isSymlink && (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                disabled={isMigrating}
+                                onClick={handleMigrateConfig}
+                                className="h-7 text-[10px] rounded-lg shrink-0 px-2.5 bg-amber-500/10 hover:bg-amber-500 hover:text-white border border-amber-500/20 hover:border-amber-500 text-amber-400 transition-all font-semibold"
+                              >
+                                {isMigrating ? (
+                                  <span className="flex items-center gap-1.5">
+                                    <Loader variant="helix" size={12} className="text-amber-400" />
+                                    Migrating...
+                                  </span>
+                                ) : (
+                                  "Migrate to UAC"
+                                )}
+                              </Button>
+                            )}
+                          </div>
+                        </div>
 
-                      <TabsContent value="skills" className="space-y-3 mt-0">
-                        {opencodeConfig ? (
-                          opencodeConfig.skills.length > 0 ? (
-                            <div className="space-y-2">
-                              {opencodeConfig.skills.map((sk, idx) => {
-                                const isExpanded = !!expandedItems[`skill-${sk.id}`];
-                                return (
-                                  <div 
-                                    key={idx} 
-                                    onClick={() => toggleItemExpanded(`skill-${sk.id}`)}
-                                    className="flex flex-col p-3 rounded-xl border border-border/60 bg-background/50 text-xs gap-1.5 hover:border-primary/20 transition-all duration-150 cursor-pointer text-left"
-                                  >
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center gap-2">
-                                        <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? "rotate-0" : "-rotate-90"}`} />
-                                        <span className="font-bold text-foreground capitalize">{sk.name}</span>
-                                        <span className="text-[9px] font-mono font-bold bg-secondary px-1.5 py-0.5 rounded text-muted-foreground">
-                                          {sk.id}
-                                        </span>
-                                      </div>
-                                      <div onClick={(e) => e.stopPropagation()}>
-                                        <Switch
-                                          checked={sk.enabled}
-                                          onCheckedChange={() => handleToggleSkillEnable(sk.id)}
-                                        />
-                                      </div>
-                                    </div>
-                                    
-                                    {isExpanded && (
-                                      <div className="mt-1 space-y-1.5 border-t border-border/20 pt-2 animate-in fade-in slide-in-from-top-1 duration-200">
-                                        <p className="text-[11px] text-muted-foreground leading-relaxed">
-                                          {sk.description}
-                                        </p>
+                        <Tabs defaultValue="mcp" variant="underline" className="w-full mt-2">
+                          <TabsList className="w-full justify-between items-center border-b border-border/40 pb-0 mb-4">
+                            <div className="flex gap-2 -mb-px">
+                              <TabsTrigger value="mcp" className="pb-2 pt-0 text-[11px] font-bold uppercase tracking-wider">
+                                MCP Servers ({currentAgentConfig?.mcpServers.length ?? 0})
+                              </TabsTrigger>
+                              <TabsTrigger value="skills" className="pb-2 pt-0 text-[11px] font-bold uppercase tracking-wider">
+                                Skills ({currentAgentConfig?.skills.length ?? 0})
+                              </TabsTrigger>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={fetchConfig}
+                              title="Refresh configuration"
+                              className="pb-2 pt-0 px-2 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" />
+                            </button>
+                          </TabsList>
 
-                                        <div className="text-[9px] font-mono text-muted-foreground/80 break-all bg-secondary/20 p-1.5 rounded border border-border/10">
-                                          Path: {sk.path}
+                          <TabsContent value="mcp" className="space-y-3 mt-0">
+                            {currentAgentConfig ? (
+                              currentAgentConfig.mcpServers.length > 0 ? (
+                                <div className="space-y-2">
+                                  {currentAgentConfig.mcpServers.map((srv, idx) => {
+                                    const isExpanded = !!expandedItems[`mcp-${srv.name}`];
+                                    return (
+                                      <div 
+                                        key={idx} 
+                                        onClick={() => toggleItemExpanded(`mcp-${srv.name}`)}
+                                        className="flex flex-col p-3 rounded-xl border border-border/60 bg-background/50 text-xs gap-1.5 hover:border-primary/20 transition-all duration-150 cursor-pointer text-left"
+                                      >
+                                        <div className="flex items-center justify-between">
+                                          <div className="flex items-center gap-2">
+                                            <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? "rotate-0" : "-rotate-90"}`} />
+                                            <span className="font-bold text-foreground">{srv.name}</span>
+                                            <span className="text-[9px] font-mono font-bold bg-secondary px-1.5 py-0.5 rounded text-muted-foreground uppercase">
+                                              {srv.sourceFile}
+                                            </span>
+                                          </div>
+                                          <div onClick={(e) => e.stopPropagation()}>
+                                            <Switch
+                                              checked={srv.enabled}
+                                              onCheckedChange={() => handleToggleMcpEnable(srv.name)}
+                                            />
+                                          </div>
                                         </div>
+                                        
+                                        {isExpanded && (
+                                          <div className="mt-1 space-y-1.5 border-t border-border/20 pt-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                                            {srv.type === "remote" ? (
+                                              <div className="text-[10px] font-mono text-muted-foreground break-all">
+                                                URL: <span className="text-primary/95">{srv.url}</span>
+                                              </div>
+                                            ) : (
+                                              <div className="text-[10px] font-mono text-muted-foreground break-all">
+                                                Command: <span className="text-foreground">{srv.command?.join(" ")}</span>
+                                              </div>
+                                            )}
+
+                                            {srv.env && Object.keys(srv.env).length > 0 && (
+                                              <div className="text-[9px] font-mono text-muted-foreground bg-secondary/30 p-1.5 rounded-lg border border-border/20">
+                                                Env: {JSON.stringify(srv.env)}
+                                              </div>
+                                            )}
+                                          </div>
+                                        )}
                                       </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <p className="text-xs text-muted-foreground italic text-center py-4 border border-dashed border-border rounded-xl">
-                              No skills found in global config.
-                            </p>
-                          )
-                        ) : (
-                          <div className="flex justify-center items-center py-6">
-                            <span className="text-xs text-muted-foreground animate-pulse">Loading configs...</span>
-                          </div>
-                        )}
-                      </TabsContent>
-                    </Tabs>
-                  </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-muted-foreground italic text-center py-4 border border-dashed border-border rounded-xl">
+                                  No MCP servers found in global config.
+                                </p>
+                              )
+                            ) : (
+                              <div className="flex flex-col justify-center items-center py-8 gap-3">
+                                <Loader variant="helix" size={24} className="text-primary" />
+                                <span className="text-xs text-muted-foreground font-medium">Loading configs...</span>
+                              </div>
+                            )}
+                          </TabsContent>
+
+                          <TabsContent value="skills" className="space-y-3 mt-0">
+                            {currentAgentConfig ? (
+                              currentAgentConfig.skills.length > 0 ? (
+                                <div className="space-y-2">
+                                  {currentAgentConfig.skills.map((sk, idx) => {
+                                    const isExpanded = !!expandedItems[`skill-${sk.id}`];
+                                    return (
+                                      <div 
+                                        key={idx} 
+                                        onClick={() => toggleItemExpanded(`skill-${sk.id}`)}
+                                        className="flex flex-col p-3 rounded-xl border border-border/60 bg-background/50 text-xs gap-1.5 hover:border-primary/20 transition-all duration-150 cursor-pointer text-left"
+                                      >
+                                        <div className="flex items-center justify-between">
+                                          <div className="flex items-center gap-2">
+                                            <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? "rotate-0" : "-rotate-90"}`} />
+                                            <span className="font-bold text-foreground capitalize">{sk.name}</span>
+                                            <span className="text-[9px] font-mono font-bold bg-secondary px-1.5 py-0.5 rounded text-muted-foreground">
+                                              {sk.id}
+                                            </span>
+                                          </div>
+                                          <div onClick={(e) => e.stopPropagation()}>
+                                            <Switch
+                                              checked={sk.enabled}
+                                              onCheckedChange={() => handleToggleSkillEnable(sk.id)}
+                                            />
+                                          </div>
+                                        </div>
+                                        
+                                        {isExpanded && (
+                                          <div className="mt-1 space-y-1.5 border-t border-border/20 pt-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                                              {sk.description}
+                                            </p>
+
+                                            <div className="text-[9px] font-mono text-muted-foreground/80 break-all bg-secondary/20 p-1.5 rounded border border-border/10">
+                                              Path: {sk.path}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-muted-foreground italic text-center py-4 border border-dashed border-border rounded-xl">
+                                  No skills found in global config.
+                                </p>
+                              )
+                            ) : (
+                              <div className="flex flex-col justify-center items-center py-8 gap-3">
+                                <Loader variant="helix" size={24} className="text-primary" />
+                                <span className="text-xs text-muted-foreground font-medium">Loading configs...</span>
+                              </div>
+                            )}
+                          </TabsContent>
+                        </Tabs>
+                      </div>
+                    );
+                  })()
                 ) : (
                   <>
                     <div className="space-y-1.5">
