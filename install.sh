@@ -11,9 +11,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-info()  { printf "\033[1;34m[info]\033[0m  %s\n" "$1"; }
-ok()    { printf "\033[1;32m[ok]\033[0m    %s\n" "$1"; }
-warn()  { printf "\033[1;33m[warn]\033[0m  %s\n" "$1"; }
+info()  { printf "\033[1;34m[info]\033[0m  %s\n" "$1" >&2; }
+ok()    { printf "\033[1;32m[ok]\033[0m    %s\n" "$1" >&2; }
+warn()  { printf "\033[1;33m[warn]\033[0m  %s\n" "$1" >&2; }
 error() { printf "\033[1;31m[error]\033[0m %s\n" "$1" >&2; exit 1; }
 
 check_dep() {
@@ -86,7 +86,7 @@ download_asset() {
     fi
 
     info "Downloading $(basename "$download_url")..."
-    curl -fSL "$download_url" -o "$TMP_DIR/$(basename "$download_url")"
+    curl -sSfL "$download_url" -o "$TMP_DIR/$(basename "$download_url")"
     echo "$TMP_DIR/$(basename "$download_url")"
 }
 
