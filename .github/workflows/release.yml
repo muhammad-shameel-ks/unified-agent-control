@@ -18,7 +18,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -53,15 +53,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Unified Agent Control ${{ github.ref_name }}"
-          releaseBody: "See the assets to download and install this version."
-          releaseDraft: true
-          prerelease: false
+        run: pnpm tauri build
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
@@ -86,7 +78,7 @@ jobs:
       - name: Install base dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git webkit2gtk-4.1 appmenu-gtk-module libappindicator-gtk3 librsvg patchelf nodejs npm curl
+          pacman -S --noconfirm base-devel git webkit2gtk-4.1 appmenu-gtk-module libappindicator-gtk3 librsvg patchelf xdg-utils nodejs npm curl
 
       - name: Install Rust
         run: |
@@ -120,7 +112,7 @@ jobs:
       - name: Build app
         run: |
           source "$HOME/.cargo/env"
-          pnpm tauri build
+          pnpm tauri build --bundles pacman
 
       - name: Upload pacman artifact
         uses: actions/upload-artifact@v4
@@ -138,7 +130,7 @@ jobs:
     steps:
       - name: Install base dependencies
         run: |
-          dnf install -y git webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel patchelf openssl-devel nodejs npm curl gcc
+          dnf install -y git webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel patchelf openssl-devel xdg-utils nodejs npm curl gcc
 
       - name: Install Rust
         run: |
@@ -172,10 +164,58 @@ jobs:
       - name: Build app
         run: |
           source "$HOME/.cargo/env"
-          pnpm tauri build
+          pnpm tauri build --bundles rpm
 
       - name: Upload RPM artifact
         uses: actions/upload-artifact@v4
         with:
           name: fedora-bundle
           path: src-tauri/target/release/bundle/rpm/*.rpm
+
+  create-release:
+    needs: [build-debian, build-arch, build-fedora]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p flat
+          find release-assets -type f -exec cp {} flat/ \;
+          ls -la flat/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Unified Agent Control ${{ github.ref_name }}"
+          body: |
+            ## Installation
+
+            ### Quick Install
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/muhammad-shameel-ks/unified-agent-control/main/install.sh | bash
+            ```
+
+            ### Manual Download
+            - **Debian/Ubuntu**: Download the `.deb` file and run `sudo dpkg -i <file>`
+            - **Arch Linux**: Download the `.pkg.tar.zst` file and run `sudo pacman -U <file>`
+            - **Fedora/RHEL**: Download the `.rpm` file and run `sudo rpm -i <file>`
+            - **Other Linux**: Download the `.AppImage` file, `chmod +x` and run
+
+            ### CLI Usage
+            ```bash
+            uac              # Open the application
+            uac <path>       # Open with a project directory (coming soon)
+            uac update       # Update to the latest release
+            ```
+          draft: false
+          prerelease: false
+          files: flat/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
