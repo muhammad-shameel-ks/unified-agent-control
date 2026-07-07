@@ -96,7 +96,7 @@ install_deps() {
         ubuntu|debian|linuxmint|pop)
             info "Installing system dependencies..."
             sudo apt-get update -qq
-            sudo apt-get install -y -qq libwebkit2gtk-4.1-0 libappindicator3-1 librsvg2-2 patchelf
+            sudo apt-get install -y -qq libwebkit2gtk-4.1-0 libayatana-appindicator3-1 librsvg2-2 patchelf
             ;;
         arch|manjaro|endeavouros)
             sudo pacman -S --noconfirm --needed webkit2gtk-4.1 libappindicator-gtk3 librsvg patchelf
