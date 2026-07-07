@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "unified-agent-control",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "identifier": "com.mallubeast.unified-agent-control",
   "build": {
     "beforeDevCommand": "pnpm dev",
