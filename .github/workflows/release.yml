@@ -4,44 +4,255 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-linux:
+  build-debian:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-0 libappindicator3-1 librsvg2-2 patchelf libssl-dev libgtk-3-dev librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev xdg-utils
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
 
       - uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-0 libappindicator3-1 librsvg2-2 patchelf libssl-dev libgtk-3-dev librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri app
-        run: pnpm tauri build
+      - name: Build app
+        run: pnpm tauri build --bundles deb,appimage
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: deb-amd64
+          name: debian-bundle
           path: src-tauri/target/release/bundle/deb/*.deb
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage-bundle
+          path: src-tauri/target/release/bundle/appimage/*.AppImage*
+
+  build-arch:
+    runs-on: ubuntu-24.04
+    container:
+      image: archlinux:latest
+      options: --user root
+    env:
+      HOME: /root
+      CARGO_HOME: /root/.cargo
+      RUSTUP_HOME: /root/.rustup
+    steps:
+      - name: Install base dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git webkit2gtk-4.1 appmenu-gtk-module libappindicator-gtk3 librsvg patchelf xdg-utils zstd nodejs npm curl
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: /root/.local/share/pnpm/store/v10
+          key: ${{ runner.os }}-arch-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-arch-pnpm-store-
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            /root/.cargo/registry
+            /root/.cargo/git
+            /root/.rustup
+            src-tauri/target
+          key: ${{ runner.os }}-arch-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-arch-cargo-
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build binary
+        run: |
+          source "$HOME/.cargo/env"
+          pnpm tauri build --no-bundle
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create pacman package
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          PKGDIR=$(mktemp -d)
+
+          mkdir -p "$PKGDIR/usr/bin"
+          mkdir -p "$PKGDIR/usr/share/applications"
+          mkdir -p "$PKGDIR/usr/share/icons/hicolor/128x128/apps"
+
+          cp src-tauri/target/release/unified-agent-control "$PKGDIR/usr/bin/"
+          chmod 755 "$PKGDIR/usr/bin/unified-agent-control"
+
+          printf '[Desktop Entry]\nType=Application\nName=Unified Agent Control\nComment=Centralized management hub for AI coding agents\nExec=unified-agent-control\nIcon=unified-agent-control\nCategories=Development;Utility;\nTerminal=false\n' \
+            > "$PKGDIR/usr/share/applications/unified-agent-control.desktop"
+
+          cp src-tauri/icons/128x128.png "$PKGDIR/usr/share/icons/hicolor/128x128/apps/unified-agent-control.png"
+
+          printf 'pkgname = unified-agent-control\npkgver = %s\npkgrel = 1\narch = x86_64\npkgdesc = Centralized management hub for AI coding agents\nurl = https://github.com/muhammad-shameel-ks/unified-agent-control\npackager = UAC CI\nlicense = MIT\ndepend = webkit2gtk-4.1\ndepend = libappindicator-gtk3\ndepend = librsvg\ndepend = patchelf\n' \
+            "$VERSION" > "$PKGDIR/.PKGINFO"
+
+          cd "$PKGDIR"
+          bsdtar -cf - .PKGINFO usr/ | zstd -19 -T0 -o "unified-agent-control-${VERSION}-1-x86_64.pkg.tar.zst"
+
+          mkdir -p "$GITHUB_WORKSPACE/src-tauri/target/release/bundle/pacman"
+          cp "unified-agent-control-${VERSION}-1-x86_64.pkg.tar.zst" "$GITHUB_WORKSPACE/src-tauri/target/release/bundle/pacman/"
+
+      - name: Upload pacman artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-bundle
+          path: src-tauri/target/release/bundle/pacman/*.pkg.tar.zst
+
+  build-fedora:
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:latest
+      options: --user root
+    env:
+      HOME: /root
+      CARGO_HOME: /root/.cargo
+      RUSTUP_HOME: /root/.rustup
+    steps:
+      - name: Install base dependencies
+        run: |
+          dnf install -y git webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel patchelf openssl-devel xdg-utils nodejs npm curl gcc
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: /root/.local/share/pnpm/store/v10
+          key: ${{ runner.os }}-fedora-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-fedora-pnpm-store-
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            /root/.cargo/registry
+            /root/.cargo/git
+            /root/.rustup
+            src-tauri/target
+          key: ${{ runner.os }}-fedora-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-fedora-cargo-
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build app
+        run: |
+          source "$HOME/.cargo/env"
+          pnpm tauri build --bundles rpm
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fedora-bundle
+          path: src-tauri/target/release/bundle/rpm/*.rpm
+
+  create-release:
+    needs: [build-debian, build-arch, build-fedora]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p flat
+          find release-assets -type f -exec cp {} flat/ \;
+          ls -la flat/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/release/bundle/deb/*.deb
-          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+          name: "Unified Agent Control ${{ github.ref_name }}"
+          body: |
+            ## Installation
+
+            ### Quick Install
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/muhammad-shameel-ks/unified-agent-control/main/install.sh | bash
+            ```
+
+            ### Manual Download
+            - **Debian/Ubuntu**: Download the `.deb` file and run `sudo dpkg -i <file>`
+            - **Arch Linux**: Download the `.pkg.tar.zst` file and run `sudo pacman -U <file>`
+            - **Fedora/RHEL**: Download the `.rpm` file and run `sudo rpm -i <file>`
+            - **Other Linux**: Download the `.AppImage` file, `chmod +x` and run
+
+            ### CLI Usage
+            ```bash
+            uac              # Open the application
+            uac <path>       # Open with a project directory (coming soon)
+            uac update       # Update to the latest release
+            ```
+          draft: false
+          prerelease: false
+          files: flat/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
