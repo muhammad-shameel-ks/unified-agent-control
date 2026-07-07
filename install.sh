@@ -90,6 +90,24 @@ download_asset() {
     echo "$TMP_DIR/$(basename "$download_url")"
 }
 
+install_deps() {
+    local distro="$1"
+    case "$distro" in
+        ubuntu|debian|linuxmint|pop)
+            info "Installing system dependencies..."
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq libwebkit2gtk-4.1-0 libappindicator3-1 librsvg2-0 patchelf
+            ;;
+        arch|manjaro|endeavouros)
+            sudo pacman -S --noconfirm --needed webkit2gtk-4.1 libappindicator-gtk3 librsvg patchelf
+            ;;
+        fedora|rhel|centos|rocky|alma)
+            sudo dnf install -y webkit2gtk4.1 libappindicator-gtk3 librsvg2 patchelf 2>/dev/null \
+                || sudo yum install -y webkit2gtk4.1 libappindicator-gtk3 librsvg2 patchelf
+            ;;
+    esac
+}
+
 install_package() {
     local file="$1"
     local distro="$2"
@@ -102,7 +120,7 @@ install_package() {
             sudo rpm -i "$file"
             ;;
         ubuntu|debian|linuxmint|pop)
-            sudo dpkg -i "$file"
+            sudo dpkg -i "$file" || sudo apt-get install -f -y
             ;;
         *)
             sudo install -m 755 "$file" "$INSTALL_DIR/$BINARY_NAME"
@@ -137,6 +155,8 @@ main() {
         ok "Already up to date!"
         exit 0
     fi
+
+    install_deps "$distro"
 
     local asset_path
     asset_path=$(download_asset "$latest_version" "$distro" "$arch")
