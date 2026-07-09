@@ -22,6 +22,7 @@ import {
   adoptProject,
   upsertProjectMcp,
   removeProjectMcp,
+  toggleProjectMcpAgent,
   toggleProjectSkill,
   createProjectSkill,
   deleteProjectSkill,
@@ -160,6 +161,18 @@ export function ProjectView({ projectPath, onClearProject }: ProjectViewProps) {
 
   const handleDeleteMcp = (name: string) => {
     removeProjectMcp(projectPath, name).then(() => fetchConfig(true));
+  };
+
+  const handleToggleMcpAgent = (srv: ProjectMcpEntry, agent: string) => {
+    const isRegistered = srv.agents.includes(agent);
+    toggleProjectMcpAgent(projectPath, srv.name, agent, {
+      name: srv.name,
+      type: srv.type,
+      url: srv.url,
+      command: srv.command,
+      env: srv.env,
+      enabled: !isRegistered,
+    }).then(() => fetchConfig(true));
   };
 
   const openEditMcp = (srv: ProjectMcpEntry) => {
@@ -334,20 +347,25 @@ export function ProjectView({ projectPath, onClearProject }: ProjectViewProps) {
                             Env: {JSON.stringify(srv.env)}
                           </div>
                         )}
-                        <div className="flex items-center gap-2 pt-2 mt-2 border-t border-border/10">
+                        <div className="flex items-center gap-2 pt-2 mt-2 border-t border-border/10" onClick={(e) => e.stopPropagation()}>
                           <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wider shrink-0">Registered in:</span>
-                          {["OpenCode", "ClaudeCode", "AGY"].map((a) => (
-                            <span
-                              key={a}
-                              className={`inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded border ${
-                                srv.agents.includes(a)
-                                  ? "border-emerald-500/30 text-emerald-400 bg-emerald-500/10"
-                                  : "border-border/40 text-muted-foreground/60 bg-secondary/20"
-                              }`}
-                            >
-                              {a} {srv.agents.includes(a) ? "Yes" : "No"}
-                            </span>
-                          ))}
+                          {["OpenCode", "ClaudeCode", "AGY"].map((a) => {
+                            const registered = srv.agents.includes(a);
+                            return (
+                              <button
+                                key={a}
+                                onClick={() => handleToggleMcpAgent(srv, a)}
+                                className={`inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded border cursor-pointer transition-all duration-150 hover:opacity-80 ${
+                                  registered
+                                    ? "border-emerald-500/30 text-emerald-400 bg-emerald-500/10"
+                                    : "border-border/40 text-muted-foreground/60 bg-secondary/20 hover:border-amber-500/30 hover:text-amber-400 hover:bg-amber-500/10"
+                                }`}
+                                title={registered ? `Click to unregister from ${a}` : `Click to register on ${a}`}
+                              >
+                                {a} {registered ? "Yes" : "No"}
+                              </button>
+                            );
+                          })}
                         </div>
                         <div className="flex items-center gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
                           <Button variant="ghost" size="sm" className="h-7 text-[10px] rounded-lg px-2" onClick={() => openEditMcp(srv)}>

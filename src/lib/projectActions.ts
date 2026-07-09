@@ -54,6 +54,28 @@ export async function removeProjectMcp(root: string, name: string): Promise<void
   await invoke("remove_project_mcp", { projectRoot: root, name });
 }
 
+export async function toggleProjectMcpAgent(
+  root: string,
+  name: string,
+  agent: string,
+  srv: McpServerPayload
+): Promise<void> {
+  await invoke("toggle_project_mcp_agent", {
+    projectRoot: root,
+    name,
+    agent,
+    payload: {
+      name: srv.name,
+      type: srv.type,
+      url: srv.url,
+      command: srv.command,
+      env: srv.env,
+      headers: srv.headers,
+      enabled: srv.enabled ?? true,
+    },
+  });
+}
+
 export async function toggleProjectSkill(root: string, id: string, enabled: boolean): Promise<void> {
   await invoke("toggle_project_skill", { projectRoot: root, id, enabled });
 }

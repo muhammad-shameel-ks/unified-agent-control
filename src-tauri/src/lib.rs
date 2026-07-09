@@ -1581,6 +1581,38 @@ fn remove_project_mcp(project_root: String, name: String) -> Result<(), String> 
 }
 
 #[tauri::command]
+fn toggle_project_mcp_agent(project_root: String, name: String, agent: String, payload: ShareMcpPayload) -> Result<(), String> {
+    match agent.as_str() {
+        "OpenCode" => {
+            let path = format!("{}/.opencode/opencode.json", project_root);
+            if payload.enabled {
+                add_or_remove_opencode_mcp(&path, &name, &Some(payload), false)?;
+            } else {
+                add_or_remove_opencode_mcp(&path, &name, &None, true)?;
+            }
+        }
+        "ClaudeCode" => {
+            let path = format!("{}/.mcp.json", project_root);
+            if payload.enabled {
+                add_or_remove_claudecode_mcp(&path, &name, &Some(payload), false)?;
+            } else {
+                add_or_remove_claudecode_mcp(&path, &name, &None, true)?;
+            }
+        }
+        "AGY" => {
+            let path = format!("{}/.agents/mcp_config.json", project_root);
+            if payload.enabled {
+                add_or_remove_agy_mcp(&path, &name, &Some(payload), false)?;
+            } else {
+                add_or_remove_agy_mcp(&path, &name, &None, true)?;
+            }
+        }
+        _ => return Err(format!("Unknown agent: {}", agent)),
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn toggle_project_skill(project_root: String, id: String, enabled: bool) -> Result<(), String> {
     let skills_dir = format!("{}/.uac/skills", project_root);
     let current_path = if enabled { format!("{}/{}.disabled", skills_dir, id) } else { format!("{}/{}", skills_dir, id) };
@@ -1965,6 +1997,7 @@ pub fn run() {
             adopt_project,
             upsert_project_mcp,
             remove_project_mcp,
+            toggle_project_mcp_agent,
             toggle_project_skill,
             create_project_skill,
             update_project_skill,
