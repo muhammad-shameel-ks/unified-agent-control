@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_cli::CliExt;
 
 pub mod updater;
@@ -1299,10 +1299,12 @@ fn get_project_config(project_root: String) -> Result<ProjectConfigResponse, Str
     let is_adopted = std::path::Path::new(&uac_skills_dir).exists();
     let mut mcp_servers: std::collections::HashMap<String, ProjectMcpEntry> = std::collections::HashMap::new();
 
-    // ── OpenCode ──────────────────────────────────────────────────────
+    // ── OpenCode (both .opencode/ and project-root config files) ──────
     let oc_json = format!("{}/.opencode/opencode.json", project_root);
     let oc_jsonc = format!("{}/.opencode/opencode.jsonc", project_root);
-    for path in [&oc_json, &oc_jsonc] {
+    let oc_root_json = format!("{}/opencode.json", project_root);
+    let oc_root_jsonc = format!("{}/opencode.jsonc", project_root);
+    for path in [&oc_json, &oc_jsonc, &oc_root_json, &oc_root_jsonc] {
         if std::path::Path::new(path).exists() {
             if let Ok(content) = std::fs::read_to_string(path) {
                 let cleaned = clean_jsonc(&content);
@@ -1435,6 +1437,33 @@ fn adopt_project(project_root: String) -> Result<String, String> {
             #[cfg(unix)]
             std::os::unix::fs::symlink("../.uac/skills", dir)
                 .map_err(|e| format!("Symlink warning {}: {}", dir.display(), e))?;
+        }
+    }
+
+    // ── Move root-level opencode.json into .opencode/ (canonical layout) ─
+    {
+        let oc_canonical = root.join(".opencode/opencode.json");
+        let oc_canonical_jsonc = root.join(".opencode/opencode.jsonc");
+        if !oc_canonical.exists() && !oc_canonical_jsonc.exists() {
+            for (src_name, dst_name) in &[
+                ("opencode.json", ".opencode/opencode.json"),
+                ("opencode.jsonc", ".opencode/opencode.jsonc"),
+            ] {
+                let src = root.join(src_name);
+                let dst = root.join(dst_name);
+                if src.exists() {
+                    let _ = std::fs::create_dir_all(root.join(".opencode"));
+                    if let Ok(raw) = std::fs::read_to_string(&src) {
+                        let cleaned = clean_jsonc(&raw);
+                        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+                            if let Ok(serialized) = serde_json::to_string_pretty(&json_val) {
+                                let _ = std::fs::write(&dst, serialized);
+                                let _ = std::fs::remove_file(&src);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1644,20 +1673,24 @@ fn get_project_preview(project_root: String) -> Result<ProjectPreview, String> {
 }
 
 fn count_opencode_mcps(root: &std::path::Path) -> usize {
-    for name in &[".opencode/opencode.json", ".opencode/opencode.jsonc"] {
+    let mut seen = std::collections::HashSet::new();
+    for name in &[
+        ".opencode/opencode.json", ".opencode/opencode.jsonc",
+        "opencode.json", "opencode.jsonc",
+    ] {
         let path = root.join(name);
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 let cleaned = clean_jsonc(&content);
                 if let Ok(parsed) = serde_json::from_str::<OpenCodeConfigFile>(&cleaned) {
                     if let Some(mcp) = parsed.mcp {
-                        return mcp.len();
+                        for key in mcp.keys() { seen.insert(key.clone()); }
                     }
                 }
             }
         }
     }
-    0
+    seen.len()
 }
 
 fn count_claudecode_mcps(root: &std::path::Path) -> usize {
@@ -1856,6 +1889,30 @@ fn md5_hash(input: &str) -> u64 {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Second instance was started — bring existing window to focus
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+                let _ = window.unminimize();
+            }
+
+            // Extract path arg from the second invocation's argv
+            // argv[0] is binary name, argv[1..] are user args
+            if let Some(path_arg) = args.get(1) {
+                let path = if path_arg == "." {
+                    std::env::current_dir()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| path_arg.clone())
+                } else {
+                    path_arg.clone()
+                };
+                if let Ok(mut cli_path) = CLI_PATH.lock() {
+                    *cli_path = Some(path.clone());
+                }
+                // Notify the frontend to re-navigate
+                let _ = app.emit("cli-path-changed", path);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_cli::init())
         .setup(|app| {

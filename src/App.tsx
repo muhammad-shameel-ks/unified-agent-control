@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "@/components/sidebar";
 import { WindowControls } from "@/components/window-controls";
 import { Dashboard } from "@/components/dashboard";
@@ -19,6 +20,17 @@ function App() {
         addSavedProject(p).catch(() => {});
       }
     }).catch(() => {});
+
+    // Listen for second-instance path pushes (single-instance plugin)
+    const unlisten = listen<string>("cli-path-changed", (event) => {
+      const p = event.payload;
+      if (p) {
+        setActiveProjectPath(p);
+        setCurrentView("projects");
+        addSavedProject(p).catch(() => {});
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
   }, []);
 
   return (
@@ -27,7 +39,10 @@ function App() {
       <main className="ml-64 flex flex-1 flex-col h-screen overflow-hidden">
         <WindowControls />
         {currentView === "dashboard" ? (
-          <Dashboard onNavigateToSettings={() => setCurrentView("settings")} />
+          <Dashboard
+            onNavigateToSettings={() => setCurrentView("settings")}
+            onOpenProject={(path) => { setActiveProjectPath(path); setCurrentView("projects"); }}
+          />
         ) : currentView === "projects" ? (
           <ProjectView
             projectPath={activeProjectPath ?? ""}

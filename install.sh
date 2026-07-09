@@ -164,13 +164,34 @@ main() {
     info "Installing..."
     install_package "$asset_path" "$distro"
 
-    if ! command -v uac >/dev/null 2>&1; then
-        sudo ln -sf "$(command -v "$BINARY_NAME")" "$INSTALL_DIR/uac" 2>/dev/null \
-            || warn "Could not create 'uac' symlink; use '$BINARY_NAME' instead."
+    # Install a wrapper script that detaches UAC from the terminal
+    # so closing the terminal doesn't kill the app
+    local wrapper_path="$INSTALL_DIR/uac"
+    sudo rm -f "$wrapper_path"
+    sudo tee "$wrapper_path" > /dev/null <<'WRAPPER'
+#!/usr/bin/env bash
+# uac — wrapper that detaches UAC from the calling terminal
+# The real binary is invoked via setsid so it gets its own session.
+# Closing the terminal will not kill the running application.
+_uac_binary=""
+for _dir in /usr/local/bin /usr/bin; do
+    if [ -x "$_dir/unified-agent-control" ]; then
+        _uac_binary="$_dir/unified-agent-control"
+        break
     fi
+done
+if [ -z "$_uac_binary" ]; then
+    echo "Error: unified-agent-control binary not found in /usr/local/bin or /usr/bin" >&2
+    exit 1
+fi
+exec setsid nohup "$_uac_binary" "$@" \
+  </dev/null >/dev/null 2>&1 &
+disown
+WRAPPER
+    sudo chmod 755 "$wrapper_path"
 
     ok "Unified Agent Control v$latest_version installed successfully!"
-    info "Run 'uac' to start the application"
+    info "Run 'uac' to start the application (detaches from terminal)"
 }
 
 main "$@"

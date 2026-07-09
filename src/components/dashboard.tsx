@@ -29,6 +29,7 @@ import {
 
 interface DashboardProps {
   onNavigateToSettings: () => void;
+  onOpenProject: (path: string) => void;
 }
 
 interface AgentCard {
@@ -39,7 +40,7 @@ interface AgentCard {
   gradient: string;
 }
 
-export function Dashboard({ onNavigateToSettings }: DashboardProps) {
+export function Dashboard({ onNavigateToSettings, onOpenProject }: DashboardProps) {
   // State
   const [searchQuery, setSearchQuery] = useState("");
   const [activeAgentModalId, setActiveAgentModalId] = useState<string | null>(null);
@@ -684,7 +685,8 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ duration: 0.2 }}
-                  className="group flex flex-col md:flex-row md:items-center justify-between p-4 rounded-xl border border-border bg-card hover:border-primary/40 hover:shadow-sm transition-all duration-200 gap-4"
+                  className="group flex flex-col md:flex-row md:items-center justify-between p-4 rounded-xl border border-border bg-card hover:border-primary/40 hover:shadow-sm transition-all duration-200 gap-4 cursor-pointer"
+                  onClick={() => onOpenProject(project.path)}
                 >
                   <div className="flex items-center gap-3">
                     <div className="p-2 rounded-lg bg-secondary text-muted-foreground group-hover:text-primary transition-colors border border-border/40">
@@ -728,7 +730,7 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
                     </div>
 
                     {/* Actions */}
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                       <Button
                         variant="ghost"
                         size="sm"
