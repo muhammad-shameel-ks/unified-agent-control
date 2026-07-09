@@ -139,7 +139,7 @@ jobs:
 
           cp src-tauri/icons/128x128.png "$PKGDIR/usr/share/icons/hicolor/128x128/apps/unified-agent-control.png"
 
-          printf 'pkgname = unified-agent-control\npkgver = %s\npkgrel = 1\narch = x86_64\npkgdesc = Centralized management hub for AI coding agents\nurl = https://github.com/muhammad-shameel-ks/unified-agent-control\npackager = UAC CI\nlicense = MIT\ndepend = webkit2gtk-4.1\ndepend = libappindicator-gtk3\ndepend = librsvg\ndepend = patchelf\n' \
+          printf 'pkgname = unified-agent-control\npkgver = %s-1\narch = x86_64\npkgdesc = Centralized management hub for AI coding agents\nurl = https://github.com/muhammad-shameel-ks/unified-agent-control\npackager = UAC CI\nlicense = MIT\ndepend = webkit2gtk-4.1\ndepend = libappindicator-gtk3\ndepend = librsvg\ndepend = patchelf\n' \
             "$VERSION" > "$PKGDIR/.PKGINFO"
 
           cd "$PKGDIR"
