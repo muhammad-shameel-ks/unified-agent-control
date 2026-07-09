@@ -1,10 +1,10 @@
-import { User, LayoutGrid, Settings } from "lucide-react";
+import { User, LayoutGrid, Settings, FolderOpen } from "lucide-react";
 import { Button } from "@/components/motion/button/base";
 import { ThemeToggle } from "@/components/motion/theme-toggle";
 
 interface SidebarProps {
-  currentView: "dashboard" | "settings";
-  onViewChange: (view: "dashboard" | "settings") => void;
+  currentView: "dashboard" | "settings" | "projects";
+  onViewChange: (view: "dashboard" | "settings" | "projects") => void;
 }
 
 export function Sidebar({ currentView, onViewChange }: SidebarProps) {
@@ -32,6 +32,16 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
           >
             <LayoutGrid className="h-4 w-4" />
             Dashboard
+          </Button>
+
+          <Button
+            variant={currentView === "projects" ? "primary" : "ghost"}
+            size="md"
+            onClick={() => onViewChange("projects")}
+            className="w-full justify-start gap-2.5 px-4 rounded-xl h-10 text-sm"
+          >
+            <FolderOpen className="h-4 w-4" />
+            Projects
           </Button>
 
           <Button

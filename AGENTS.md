@@ -73,3 +73,18 @@ pnpm tauri build  # Tauri production build
 - `@beui/checkbox` (custom motion checkbox wrapper used in the matrix).
 - Window focus listeners automatically query the active agent's configuration from the disk, allowing instant updates if settings are modified outside UAC.
 - Escape (`Esc`) key listener is bound to `<MorphingModal>` to automatically close all opened configurations.
+
+### Project-Level Unification
+- Projects are stored in `~/.config/uac/projects.json` as a list of `SavedProject` entries (id, name, path, detectedAgents, uacAdopted).
+- The dashboard shows real saved projects with agent detection badges. Empty state when no projects exist.
+- Launching `uac <path>` or `uac .` auto-adds the project to the saved list and opens the Projects view.
+- **Adoption flow**: When a project isn't unified yet, a "Unify Project" button opens a preview dialog showing detected agents, existing MCP servers per agent, and existing skills. User must confirm before adoption proceeds.
+- **On-disk layout after adoption**:
+  - `.uac/skills/<id>/SKILL.md` — canonical skill files, committed to git.
+  - `.opencode/skills`, `.claude/skills`, `.agents/skills` — symlinks to `../.uac/skills`, gitignored.
+  - `.opencode/opencode.json`, `.mcp.json`, `.agents/mcp_config.json` — all three written by UAC on every MCP change (write-through).
+- **MCP write-through**: `upsert_project_mcp` writes the same logical entry to all three native files in their respective formats. No symlinks for MCP.
+- **Agent detection**: Scans for `.opencode/`, `opencode.json`, `.mcp.json`, `.claude/`, `CLAUDE.md`, `.agents/`, `AGENTS.md`, `GEMINI.md` at project root.
+- **Gitignore**: Adoption appends `.opencode/skills`, `.claude/skills`, `.agents/skills` to the project's `.gitignore`.
+- Key Rust commands: `get_project_preview`, `get_project_config`, `adopt_project`, `upsert_project_mcp`, `remove_project_mcp`, `toggle_project_skill`, `create_project_skill`, `update_project_skill`, `delete_project_skill`, `get_saved_projects`, `add_saved_project`, `remove_saved_project`, `scan_directory_for_projects`.
+- Key frontend files: `src/lib/projectActions.ts`, `src/components/project-view.tsx`.

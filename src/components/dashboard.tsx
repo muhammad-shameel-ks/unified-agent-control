@@ -1,16 +1,15 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { 
   Search, 
   Folder, 
-  Play, 
-  Square, 
   Plus, 
   X, 
-  Terminal, 
   Sparkles,
   Settings,
   ChevronDown,
-  RefreshCw
+  RefreshCw,
+  Copy,
+  Check
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "motion/react";
@@ -21,6 +20,12 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/motion/ta
 import { Loader } from "@/components/motion/loader";
 import { Checkbox } from "@/components/motion/checkbox";
 import { registerMcpOnAllAgents, type McpServerPayload } from "@/lib/mcpActions";
+import {
+  getSavedProjects,
+  addSavedProject,
+  removeSavedProject,
+  type SavedProject,
+} from "@/lib/projectActions";
 
 interface DashboardProps {
   onNavigateToSettings: () => void;
@@ -34,23 +39,14 @@ interface AgentCard {
   gradient: string;
 }
 
-interface Project {
-  id: string;
-  name: string;
-  path: string;
-  agent: "OpenCode" | "ClaudeCode" | "AGY" | "None";
-  status: "Running" | "Idle";
-  lastActive: string;
-}
-
 export function Dashboard({ onNavigateToSettings }: DashboardProps) {
   // State
   const [searchQuery, setSearchQuery] = useState("");
   const [activeAgentModalId, setActiveAgentModalId] = useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
   const [newProjectPath, setNewProjectPath] = useState("");
-  const [newProjectAgent, setNewProjectAgent] = useState<Project["agent"]>("None");
+  const [projects, setProjects] = useState<SavedProject[]>([]);
+  const [isLoadingProjects, setIsLoadingProjects] = useState(true);
 
   interface OpenCodeConfig {
     configDir: string;
@@ -120,6 +116,26 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
   const [agyConfig, setAgyConfig] = useState<AgyConfig | null>(null);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const handleCopyUacCommand = useCallback((projectPath: string, projectId: string) => {
+    navigator.clipboard.writeText(`uac ${projectPath}`).then(() => {
+      setCopiedId(projectId);
+      setTimeout(() => setCopiedId(null), 2000);
+    });
+  }, []);
+
+  const fetchProjects = useCallback(() => {
+    setIsLoadingProjects(true);
+    getSavedProjects()
+      .then(setProjects)
+      .catch(() => setProjects([]))
+      .finally(() => setIsLoadingProjects(false));
+  }, []);
+
+  useEffect(() => {
+    fetchProjects();
+  }, [fetchProjects]);
 
   const fetchConfig = (silent = false) => {
     if (silent) setIsRefreshing(true);
@@ -483,41 +499,22 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
     }
   };
 
-  // Initial Mock Data
-  const [projects, setProjects] = useState<Project[]>([
-    {
-      id: "1",
-      name: "unified-agent-control",
-      path: "/home/mallubeast/Dev/applications/desktop/unified-agent-control",
-      agent: "ClaudeCode",
-      status: "Running",
-      lastActive: "Just now",
-    },
-    {
-      id: "2",
-      name: "cortex-engine",
-      path: "/home/mallubeast/Dev/services/cortex-engine",
-      agent: "OpenCode",
-      status: "Running",
-      lastActive: "12 mins ago",
-    },
-    {
-      id: "3",
-      name: "agent-sandbox",
-      path: "/home/mallubeast/Dev/sandboxes/agent-sandbox",
-      agent: "OpenCode",
-      status: "Idle",
-      lastActive: "2 hours ago",
-    },
-    {
-      id: "4",
-      name: "antigravity-cli",
-      path: "/home/mallubeast/Dev/cli/antigravity-cli",
-      agent: "None",
-      status: "Idle",
-      lastActive: "1 day ago",
-    },
-  ]);
+  const handleAddProject = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProjectPath.trim()) return;
+
+    addSavedProject(newProjectPath.trim())
+      .then(() => {
+        setNewProjectPath("");
+        setIsAddModalOpen(false);
+        fetchProjects();
+      })
+      .catch((err) => console.error("Failed to add project:", err));
+  };
+
+  const handleRemoveProject = (path: string) => {
+    removeSavedProject(path).then(() => fetchProjects());
+  };
 
   const agents: AgentCard[] = [
     {
@@ -542,43 +539,6 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
       gradient: "from-emerald-500/10 via-transparent to-transparent",
     },
   ];
-
-  // Actions
-  const handleToggleAgent = (projectId: string) => {
-    setProjects((prev) =>
-      prev.map((p) => {
-        if (p.id === projectId) {
-          const nextStatus = p.status === "Running" ? "Idle" : "Running";
-          return {
-            ...p,
-            status: nextStatus,
-            lastActive: nextStatus === "Running" ? "Just now" : p.lastActive,
-          };
-        }
-        return p;
-      })
-    );
-  };
-
-  const handleAddProject = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newProjectName.trim()) return;
-
-    const newProj: Project = {
-      id: Date.now().toString(),
-      name: newProjectName,
-      path: newProjectPath || `~/Dev/${newProjectName}`,
-      agent: newProjectAgent,
-      status: newProjectAgent !== "None" ? "Running" : "Idle",
-      lastActive: "Just now",
-    };
-
-    setProjects((prev) => [newProj, ...prev]);
-    setNewProjectName("");
-    setNewProjectPath("");
-    setNewProjectAgent("None");
-    setIsAddModalOpen(false);
-  };
 
   // Filter logic
   const filteredProjects = useMemo(() => {
@@ -708,6 +668,12 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
 
       {/* Projects List */}
       <div className="flex-1 min-h-0">
+        {isLoadingProjects ? (
+          <div className="flex flex-col justify-center items-center py-20 gap-3">
+            <Loader variant="helix" size={24} className="text-primary" />
+            <span className="text-xs text-muted-foreground font-medium">Loading projects...</span>
+          </div>
+        ) : (
         <AnimatePresence mode="popLayout">
           {filteredProjects.length > 0 ? (
             <div className="flex flex-col gap-3">
@@ -727,66 +693,66 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
                     <div>
                       <h4 className="font-bold text-foreground flex items-center gap-2">
                         {project.name}
-                        {project.status === "Running" && (
-                          <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                        {project.uacAdopted && (
+                          <span className="text-[9px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded">
+                            UAC
+                          </span>
                         )}
                       </h4>
                       <p className="text-xs text-muted-foreground font-mono mt-0.5 line-clamp-1">{project.path}</p>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between md:justify-end gap-6 border-t md:border-t-0 border-border/40 pt-3 md:pt-0">
-                    {/* Active Agent Badge */}
+                  <div className="flex items-center justify-between md:justify-end gap-4 border-t md:border-t-0 border-border/40 pt-3 md:pt-0">
+                    {/* Detected Agents */}
                     <div className="flex flex-col items-start md:items-end gap-1">
-                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Active Agent</span>
-                      <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-md border ${
-                        project.agent === "OpenCode"
-                          ? "bg-violet-500/5 text-violet-500 border-violet-500/10"
-                          : project.agent === "ClaudeCode"
-                          ? "bg-amber-500/5 text-amber-500 border-amber-500/10"
-                          : project.agent === "AGY"
-                          ? "bg-emerald-500/5 text-emerald-500 border-emerald-500/10"
-                          : "bg-muted text-muted-foreground border-border/85"
-                      }`}>
-                        {project.agent === "None" ? "No Agent" : project.agent}
-                      </span>
-                    </div>
-
-                    {/* Last active info */}
-                    <div className="hidden sm:flex flex-col items-end gap-1">
-                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Last Active</span>
-                      <span className="text-xs text-foreground font-medium">{project.lastActive}</span>
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Agents</span>
+                      <div className="flex gap-1 flex-wrap justify-end">
+                        {project.detectedAgents.length > 0 ? project.detectedAgents.map((a) => (
+                          <span
+                            key={a}
+                            className={`inline-flex items-center text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+                              a === "OpenCode"
+                                ? "bg-violet-500/5 text-violet-400 border-violet-500/10"
+                                : a === "ClaudeCode"
+                                ? "bg-amber-500/5 text-amber-400 border-amber-500/10"
+                                : "bg-emerald-500/5 text-emerald-400 border-emerald-500/10"
+                            }`}
+                          >
+                            {a === "ClaudeCode" ? "Claude" : a === "AGY" ? "AGY" : "OC"}
+                          </span>
+                        )) : (
+                          <span className="text-[9px] text-muted-foreground/60 font-mono">None detected</span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Actions */}
                     <div className="flex items-center gap-2">
-                      {project.agent !== "None" && (
-                        <Button
-                          variant={project.status === "Running" ? "outline" : "secondary"}
-                          size="sm"
-                          onClick={() => handleToggleAgent(project.id)}
-                          className="h-8 rounded-lg px-3 text-xs gap-1.5"
-                        >
-                          {project.status === "Running" ? (
-                            <>
-                              <Square className="h-3 w-3 fill-current" />
-                              Stop
-                            </>
-                          ) : (
-                            <>
-                              <Play className="h-3 w-3 fill-current" />
-                              Start
-                            </>
-                          )}
-                        </Button>
-                      )}
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-8 w-8 rounded-lg p-0"
-                        title="Open Terminal"
+                        className="h-8 rounded-lg px-2.5 gap-1.5"
+                        title="Copy UAC command to open this project"
+                        onClick={() => handleCopyUacCommand(project.path, project.id)}
                       >
-                        <Terminal className="h-3.5 w-3.5" />
+                        {copiedId === project.id ? (
+                          <Check className="h-3.5 w-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                        <span className="text-[10px] font-semibold">
+                          {copiedId === project.id ? "Copied!" : "uac"}
+                        </span>
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 rounded-lg p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/5"
+                        title="Remove from list"
+                        onClick={() => handleRemoveProject(project.path)}
+                      >
+                        <X className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   </div>
@@ -804,11 +770,12 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
               </div>
               <h3 className="font-bold text-foreground">No projects found</h3>
               <p className="text-sm text-muted-foreground mt-1 max-w-xs">
-                No projects matched your criteria. Add a new project or adjust your filters.
+                Add a project by path, or run <code className="text-xs bg-secondary px-1.5 py-0.5 rounded font-mono">uac /path/to/project</code> from the terminal.
               </p>
             </motion.div>
           )}
         </AnimatePresence>
+        )}
       </div>
 
       {/* Add Project Morphing Modal */}
@@ -834,49 +801,18 @@ export function Dashboard({ onNavigateToSettings }: DashboardProps) {
 
         <form onSubmit={handleAddProject} className="space-y-4 pt-4">
           <div className="space-y-1.5">
-            <label htmlFor="proj-name" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Project Name
-            </label>
-            <input
-              id="proj-name"
-              type="text"
-              required
-              placeholder="e.g. unified-agent-control"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
-            />
-          </div>
-
-          <div className="space-y-1.5">
             <label htmlFor="proj-path" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
               Project Directory Path
             </label>
             <input
               id="proj-path"
               type="text"
+              required
               placeholder="e.g. /home/mallubeast/Dev/my-project"
               value={newProjectPath}
               onChange={(e) => setNewProjectPath(e.target.value)}
               className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
             />
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="proj-agent" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Attach Agent
-            </label>
-            <select
-              id="proj-agent"
-              value={newProjectAgent}
-              onChange={(e) => setNewProjectAgent(e.target.value as Project["agent"])}
-              className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
-            >
-              <option value="None">None (No Agent)</option>
-              <option value="OpenCode">OpenCode</option>
-              <option value="ClaudeCode">ClaudeCode</option>
-              <option value="AGY">AGY</option>
-            </select>
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-border/40 mt-6">
