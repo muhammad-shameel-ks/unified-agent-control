@@ -1,15 +1,17 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { 
-  Search, 
-  Folder, 
-  Plus, 
-  X, 
+import {
+  Search,
+  Folder,
+  Plus,
+  X,
   Sparkles,
   Settings,
   ChevronDown,
   RefreshCw,
   Copy,
-  Check
+  Check,
+  Undo2,
+  AlertTriangle,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "motion/react";
@@ -20,6 +22,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/motion/ta
 import { Loader } from "@/components/motion/loader";
 import { Checkbox } from "@/components/motion/checkbox";
 import { registerMcpOnAllAgents, type McpServerPayload } from "@/lib/mcpActions";
+import { revertGlobalConfig, type RevertReport } from "@/lib/globalActions";
 import {
   getSavedProjects,
   addSavedProject,
@@ -403,6 +406,43 @@ export function Dashboard({ onNavigateToSettings, onOpenProject }: DashboardProp
   };
   const [isMigrating, setIsMigrating] = useState(false);
 
+  // ── Revert All (global) ──────────────────────────────────────────
+  const [isRevertModalOpen, setIsRevertModalOpen] = useState(false);
+  const [revertConfirmText, setRevertConfirmText] = useState("");
+  const [isReverting, setIsReverting] = useState(false);
+  const [revertReport, setRevertReport] = useState<RevertReport | null>(null);
+
+  const isAnySymlinked = Boolean(
+    opencodeConfig?.isSymlink ||
+    claudecodeConfig?.isSymlink ||
+    agyConfig?.isSymlink
+  );
+
+  const openRevertModal = () => {
+    setRevertConfirmText("");
+    setRevertReport(null);
+    setIsRevertModalOpen(true);
+  };
+
+  const closeRevertModal = () => {
+    if (isReverting) return;
+    setIsRevertModalOpen(false);
+  };
+
+  const handleRevertAll = async () => {
+    if (revertConfirmText !== "REVERT") return;
+    setIsReverting(true);
+    try {
+      const report = await revertGlobalConfig();
+      setRevertReport(report);
+      await fetchConfig(true);
+    } catch (err) {
+      console.error("Revert failed:", err);
+    } finally {
+      setIsReverting(false);
+    }
+  };
+
   const handleMigrateConfig = () => {
     setIsMigrating(true);
     if (activeAgentModalId === "OpenCode") {
@@ -553,6 +593,162 @@ export function Dashboard({ onNavigateToSettings, onOpenProject }: DashboardProp
 
   return (
     <div className="flex-1 w-full p-6 flex flex-col gap-6 overflow-y-auto">
+      {/* Global Revert banner — only visible when at least one agent is symlinked */}
+      {isAnySymlinked && (
+        <div className="flex items-center justify-between p-3.5 rounded-2xl border border-destructive/25 bg-destructive/5">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-1.5 rounded-lg bg-destructive/10 border border-destructive/25 shrink-0">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-foreground">UAC is managing your global configs</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Restore original paths from the pre-UAC <code>.bak</code> snapshot. Changes made <em>through UAC</em> since migration will be lost.
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={openRevertModal}
+            className="shrink-0 rounded-xl gap-1.5 h-9 px-3.5 text-xs font-semibold border border-destructive/30 bg-destructive/10 hover:bg-destructive hover:text-destructive-foreground hover:border-destructive text-destructive transition-all"
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+            Revert All
+          </Button>
+        </div>
+      )}
+
+      {/* Revert All confirmation modal */}
+      <MorphingModal
+        viewId={isRevertModalOpen ? "revert-all-global" : null}
+        onClose={closeRevertModal}
+        placement="center"
+        className="max-w-md"
+      >
+        <div className="flex items-center justify-between pb-4 border-b border-border/60">
+          <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-destructive" />
+            Revert UAC global configs?
+          </h3>
+          <button
+            type="button"
+            onClick={closeRevertModal}
+            disabled={isReverting}
+            className="rounded-lg p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors disabled:opacity-50"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-4 pt-4 text-left">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            This will remove the UAC symlinks and restore each agent's config from the pre-UAC <code className="px-1 py-0.5 rounded bg-secondary/40 text-foreground/80">.bak</code> snapshot:
+          </p>
+          <ul className="space-y-1.5 text-[11px] font-mono text-muted-foreground">
+            <li className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-violet-500/60" />
+              <code>~/.config/opencode</code>
+              <span className="text-foreground/40">←</span>
+              <code>~/.config/opencode.bak</code>
+            </li>
+            <li className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500/60" />
+              <code>~/.claude</code>
+              <span className="text-foreground/40">←</span>
+              <code>~/.claude.bak</code>
+            </li>
+            <li className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500/60" />
+              <code>~/.gemini/config</code>
+              <span className="text-foreground/40">←</span>
+              <code>~/.gemini/config.bak</code>
+            </li>
+          </ul>
+          <div className="p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300 leading-relaxed">
+            <strong>Heads up:</strong> any config edits you made <em>through UAC</em> since migrating will be replaced by the original <code>.bak</code> snapshot. The UAC canonical copy at <code>~/.config/uac/&lt;agent&gt;-config/</code> is left untouched.
+          </div>
+
+          {!revertReport ? (
+            <div className="space-y-1.5">
+              <label htmlFor="revert-confirm" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                Type <code className="text-destructive">REVERT</code> to confirm
+              </label>
+              <input
+                id="revert-confirm"
+                type="text"
+                value={revertConfirmText}
+                onChange={(e) => setRevertConfirmText(e.target.value)}
+                disabled={isReverting}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="REVERT"
+                className="w-full px-3 py-2 text-sm font-mono rounded-lg border border-border bg-background/50 focus:outline-none focus:ring-2 focus:ring-destructive/20 focus:border-destructive transition-all"
+              />
+            </div>
+          ) : (
+            <div className="space-y-1.5 text-[11px] font-mono">
+              {(["opencode", "claudecode", "agy"] as const).map((k) => {
+                const r = revertReport[k];
+                return (
+                  <div
+                    key={k}
+                    className={`flex items-start gap-2 p-2 rounded-lg border ${
+                      r.error
+                        ? "border-destructive/30 bg-destructive/5 text-destructive"
+                        : "border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
+                    }`}
+                  >
+                    <span className="shrink-0 mt-0.5">
+                      {r.error ? "✕" : "✓"}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="font-bold uppercase tracking-wider text-[10px]">{k}</div>
+                      <div className="break-words">{r.error ?? r.ok}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-3 pt-4 border-t border-border/40 mt-6">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={closeRevertModal}
+            disabled={isReverting}
+            className="rounded-lg h-9 px-4"
+          >
+            {revertReport ? "Close" : "Cancel"}
+          </Button>
+          {!revertReport && (
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={handleRevertAll}
+              disabled={isReverting || revertConfirmText !== "REVERT"}
+              className="rounded-lg h-9 px-4 gap-1.5 bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              {isReverting ? (
+                <>
+                  <Loader variant="helix" size={14} className="text-destructive-foreground" />
+                  Reverting...
+                </>
+              ) : (
+                <>
+                  <Undo2 className="h-3.5 w-3.5" />
+                  Revert All
+                </>
+              )}
+            </Button>
+          )}
+        </div>
+      </MorphingModal>
+
       {/* Top Cards (Agents + Global Config Summary) */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {/* Global Config Summary Card */}

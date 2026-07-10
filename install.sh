@@ -164,15 +164,16 @@ main() {
     info "Installing..."
     install_package "$asset_path" "$distro"
 
-    # Install a wrapper script that detaches UAC from the terminal
-    # so closing the terminal doesn't kill the app
+    # Install a thin wrapper script. The real binary detaches itself from the
+    # terminal (so closing it doesn't kill the app) when launched without a
+    # subcommand — keeping the wrapper simple means `uac update` runs in the
+    # foreground and can prompt for the sudo password.
     local wrapper_path="$INSTALL_DIR/uac"
     sudo rm -f "$wrapper_path"
     sudo tee "$wrapper_path" > /dev/null <<'WRAPPER'
 #!/usr/bin/env bash
-# uac — wrapper that detaches UAC from the calling terminal
-# The real binary is invoked via setsid so it gets its own session.
-# Closing the terminal will not kill the running application.
+# uac — thin shim around the unified-agent-control binary.
+# The binary handles detaching from the terminal for the GUI.
 _uac_binary=""
 for _dir in /usr/local/bin /usr/bin; do
     if [ -x "$_dir/unified-agent-control" ]; then
@@ -184,9 +185,7 @@ if [ -z "$_uac_binary" ]; then
     echo "Error: unified-agent-control binary not found in /usr/local/bin or /usr/bin" >&2
     exit 1
 fi
-exec setsid nohup "$_uac_binary" "$@" \
-  </dev/null >/dev/null 2>&1 &
-disown
+exec "$_uac_binary" "$@"
 WRAPPER
     sudo chmod 755 "$wrapper_path"
 

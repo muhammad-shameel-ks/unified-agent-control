@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Check,
   FolderOpen,
+  Unlink,
 } from "lucide-react";
 import { Button } from "@/components/motion/button/base";
 import { MorphingModal } from "@/components/motion/morphing-modal";
@@ -20,6 +21,7 @@ import { Loader } from "@/components/motion/loader";
 import {
   getProjectConfig,
   adoptProject,
+  unadoptProject,
   upsertProjectMcp,
   removeProjectMcp,
   toggleProjectMcpAgent,
@@ -27,6 +29,7 @@ import {
   createProjectSkill,
   deleteProjectSkill,
   getProjectPreview,
+  getSavedProjects,
   type ProjectConfig,
   type ProjectMcpEntry,
   type ProjectPreview,
@@ -107,6 +110,36 @@ export function ProjectView({ projectPath, onClearProject }: ProjectViewProps) {
       console.error("Adopt failed:", err);
     } finally {
       setIsAdopting(false);
+    }
+  };
+
+  // ── Unadopt ──────────────────────────────────────────────────────────
+  const [isUnadoptModalOpen, setIsUnadoptModalOpen] = useState(false);
+  const [isUnadopting, setIsUnadopting] = useState(false);
+
+  const openUnadoptModal = () => setIsUnadoptModalOpen(true);
+  const closeUnadoptModal = () => {
+    if (isUnadopting) return;
+    setIsUnadoptModalOpen(false);
+  };
+
+  const handleUnadopt = async () => {
+    setIsUnadopting(true);
+    try {
+      await unadoptProject(projectPath);
+      setIsUnadoptModalOpen(false);
+      await fetchConfig();
+      // Refresh the global saved-projects list so the uacAdopted badge flips
+      try {
+        const updated = await getSavedProjects();
+        if (onClearProject && updated.every((p) => p.path !== projectPath || !p.uacAdopted)) {
+          // project is no longer adopted — keep the view open but state is fresh
+        }
+      } catch {}
+    } catch (err) {
+      console.error("Unadopt failed:", err);
+    } finally {
+      setIsUnadopting(false);
     }
   };
 
@@ -240,6 +273,17 @@ export function ProjectView({ projectPath, onClearProject }: ProjectViewProps) {
           >
             <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
           </button>
+          {config?.isAdopted && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={openUnadoptModal}
+              className="rounded-xl gap-1.5 border border-destructive/30 bg-destructive/5 hover:bg-destructive hover:text-destructive-foreground hover:border-destructive text-destructive transition-all"
+            >
+              <Unlink className="h-4 w-4" />
+              Unadopt Project
+            </Button>
+          )}
           {onClearProject && (
             <Button variant="ghost" size="sm" onClick={onClearProject} className="rounded-xl gap-1.5">
               <X className="h-4 w-4" />
@@ -248,6 +292,102 @@ export function ProjectView({ projectPath, onClearProject }: ProjectViewProps) {
           )}
         </div>
       </div>
+
+      {/* Unadopt confirmation modal */}
+      <MorphingModal
+        viewId={isUnadoptModalOpen ? "unadopt-project" : null}
+        onClose={closeUnadoptModal}
+        placement="center"
+        className="max-w-md"
+      >
+        <div className="flex items-center justify-between pb-4 border-b border-border/60">
+          <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
+            <Unlink className="h-5 w-5 text-destructive" />
+            Unadopt this project?
+          </h3>
+          <button
+            type="button"
+            onClick={closeUnadoptModal}
+            disabled={isUnadopting}
+            className="rounded-lg p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors disabled:opacity-50"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-4 pt-4 text-left">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            UAC will reverse the project-level unification for{" "}
+            <code className="px-1 py-0.5 rounded bg-secondary/40 text-foreground/80 break-all">{projectPath}</code>
+            :
+          </p>
+          <ul className="space-y-1.5 text-[11px] text-muted-foreground">
+            <li className="flex items-start gap-2">
+              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-violet-500/60 shrink-0" />
+              <span>
+                Skills in <code>.uac/skills/</code> are copied into <code>.opencode/skills/</code>,{" "}
+                <code>.claude/skills/</code>, and <code>.agents/skills/</code> as real folders.
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-amber-500/60 shrink-0" />
+              <span>
+                The three symlinks at <code>.opencode/skills</code>, <code>.claude/skills</code>, and{" "}
+                <code>.agents/skills</code> are removed.
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-emerald-500/60 shrink-0" />
+              <span>
+                UAC-added entries are removed from <code>.gitignore</code>. The project is marked not adopted.
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-muted-foreground/40 shrink-0" />
+              <span>
+                MCP files at <code>.opencode/opencode.json</code>, <code>.mcp.json</code>, and{" "}
+                <code>.agents/mcp_config.json</code> are kept as-is.
+              </span>
+            </li>
+          </ul>
+          <div className="p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300 leading-relaxed">
+            The <code>.uac/skills/</code> directory is left in place so you can inspect or remove it manually. You'll need to re-run <em>Unify Project</em> to manage skills centrally again.
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 pt-4 border-t border-border/40 mt-6">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={closeUnadoptModal}
+            disabled={isUnadopting}
+            className="rounded-lg h-9 px-4"
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={handleUnadopt}
+            disabled={isUnadopting}
+            className="rounded-lg h-9 px-4 gap-1.5 bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+          >
+            {isUnadopting ? (
+              <>
+                <Loader variant="helix" size={14} className="text-destructive-foreground" />
+                Unadopting...
+              </>
+            ) : (
+              <>
+                <Unlink className="h-3.5 w-3.5" />
+                Unadopt Project
+              </>
+            )}
+          </Button>
+        </div>
+      </MorphingModal>
 
       {/* Adoption prompt */}
       {config && !config.isAdopted && (

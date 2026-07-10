@@ -35,6 +35,10 @@ export async function adoptProject(root: string): Promise<string> {
   return invoke<string>("adopt_project", { projectRoot: root });
 }
 
+export async function unadoptProject(root: string): Promise<string> {
+  return invoke<string>("unadopt_project", { projectRoot: root });
+}
+
 export async function upsertProjectMcp(root: string, srv: McpServerPayload): Promise<void> {
   await invoke("upsert_project_mcp", {
     projectRoot: root,

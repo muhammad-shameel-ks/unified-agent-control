@@ -974,6 +974,114 @@ fn migrate_agy_config() -> Result<String, String> {
     Ok(format!("Successfully migrated config to {} and created symlink", new_dir_path))
 }
 
+// ====================== REVERT (GLOBAL) ======================
+
+fn locate_backup(native_path: &str, label: &str) -> Option<String> {
+    let plain = format!("{}.bak", native_path);
+    if std::path::Path::new(&plain).exists() {
+        return Some(plain);
+    }
+    let parent = std::path::Path::new(native_path).parent()?;
+    let base_name = std::path::Path::new(native_path).file_name()?.to_string_lossy().into_owned();
+    let prefix = format!("{}.bak.", base_name);
+    let mut best: Option<(u64, String)> = None;
+    if let Ok(entries) = std::fs::read_dir(parent) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&prefix) {
+                if let Some(ts_str) = name.strip_prefix(&prefix) {
+                    if let Ok(ts) = ts_str.parse::<u64>() {
+                        if best.as_ref().map_or(true, |(b, _)| ts > *b) {
+                            best = Some((ts, entry.path().to_string_lossy().into_owned()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if best.is_none() {
+        eprintln!("[revert] {}: no .bak or .bak.<timestamp> sibling found next to {}", label, native_path);
+    }
+    best.map(|(_, p)| p)
+}
+
+fn restore_agent_from_backup(native_path: &str, label: &str) -> Result<String, String> {
+    let native = std::path::Path::new(native_path);
+
+    let metadata = std::fs::symlink_metadata(native)
+        .map_err(|e| format!("{}: cannot stat native path: {}", label, e))?;
+    if !metadata.file_type().is_symlink() {
+        return Ok(format!("{}: not migrated (no symlink) — skipped", label));
+    }
+
+    let backup_path = match locate_backup(native_path, label) {
+        Some(p) => p,
+        None => {
+            return Err(format!(
+                "{}: symlink exists at {} but no .bak sibling was found. Refusing to leave the symlink dangling. Backup is required to revert safely.",
+                label, native_path
+            ));
+        }
+    };
+
+    std::fs::remove_file(native)
+        .map_err(|e| format!("{}: failed to remove symlink {}: {}", label, native_path, e))?;
+    std::fs::rename(&backup_path, native)
+        .map_err(|e| format!("{}: failed to restore from {}: {}", label, backup_path, e))?;
+
+    Ok(format!("{}: restored from {} → {}", label, backup_path, native_path))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RevertAgentStatus {
+    ok: Option<String>,
+    error: Option<String>,
+}
+
+impl RevertAgentStatus {
+    fn from_result(r: Result<String, String>) -> Self {
+        match r {
+            Ok(msg) => Self { ok: Some(msg), error: None },
+            Err(e) => Self { ok: None, error: Some(e) },
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RevertReport {
+    opencode: RevertAgentStatus,
+    claudecode: RevertAgentStatus,
+    agy: RevertAgentStatus,
+}
+
+#[tauri::command]
+fn revert_global_config() -> RevertReport {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(e) => {
+            return RevertReport {
+                opencode: RevertAgentStatus::from_result(Err(e.to_string())),
+                claudecode: RevertAgentStatus::from_result(Err(e.to_string())),
+                agy: RevertAgentStatus::from_result(Err(e.to_string())),
+            };
+        }
+    };
+
+    let oc_path = format!("{}/.config/opencode", home);
+    let cc_path = format!("{}/.claude", home);
+    let agy_path = format!("{}/.gemini/config", home);
+
+    RevertReport {
+        opencode: RevertAgentStatus::from_result(restore_agent_from_backup(&oc_path, "OpenCode")),
+        claudecode: RevertAgentStatus::from_result(restore_agent_from_backup(&cc_path, "ClaudeCode")),
+        agy: RevertAgentStatus::from_result(restore_agent_from_backup(&agy_path, "Antigravity")),
+    }
+}
+
+// ====================== END REVERT (GLOBAL) ======================
+
 #[tauri::command]
 fn toggle_agy_mcp_server(name: String, source_file: String, enabled: bool) -> Result<(), String> {
     let home = std::env::var("HOME").map_err(|e| e.to_string())?;
@@ -1558,6 +1666,102 @@ fn adopt_project(project_root: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn unadopt_project(project_root: String) -> Result<String, String> {
+    let root = std::path::Path::new(&project_root);
+    if !root.exists() || !root.is_dir() {
+        return Err("Project root does not exist or is not a directory".into());
+    }
+
+    let uac_skills_dir = root.join(".uac").join("skills");
+    if !uac_skills_dir.exists() {
+        return Err("Project is not adopted: ~/.uac/skills/ does not exist".into());
+    }
+
+    // ── Distribute skills back to each agent's skill dir as real folders ──
+    let agent_skills_dirs = [
+        root.join(".opencode").join("skills"),
+        root.join(".claude").join("skills"),
+        root.join(".agents").join("skills"),
+    ];
+
+    for dir in &agent_skills_dirs {
+        if let Ok(meta) = std::fs::symlink_metadata(dir) {
+            if meta.file_type().is_symlink() {
+                std::fs::remove_file(dir).map_err(|e| {
+                    format!("Failed to remove symlink {}: {}", dir.display(), e)
+                })?;
+            } else {
+                return Err(format!(
+                    "{} exists and is not a symlink — refusing to overwrite. Resolve manually before unadopting.",
+                    dir.display()
+                ));
+            }
+        }
+        std::fs::create_dir_all(dir).map_err(|e| {
+            format!("Failed to recreate {}: {}", dir.display(), e)
+        })?;
+    }
+
+    let mut skill_count = 0usize;
+    let entries = std::fs::read_dir(&uac_skills_dir)
+        .map_err(|e| format!("Failed to read .uac/skills: {}", e))?;
+    for entry in entries.flatten() {
+        if entry.file_type().map_or(false, |ft| ft.is_dir()) {
+            let skill_path = entry.path();
+            for target_dir in &agent_skills_dirs {
+                let target = target_dir.join(entry.file_name());
+                if !target.exists() {
+                    copy_dir_all(&skill_path, &target).map_err(|e| {
+                        format!("Failed to copy skill {} to {}: {}", entry.file_name().to_string_lossy(), target.display(), e)
+                    })?;
+                }
+            }
+            skill_count += 1;
+        }
+    }
+
+    // ── Remove UAC-added lines from .gitignore ──────────────────────
+    let gitignore_path = root.join(".gitignore");
+    if gitignore_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&gitignore_path) {
+            let uac_lines = [".opencode/skills", ".claude/skills", ".agents/skills"];
+            let filtered: Vec<&str> = content
+                .lines()
+                .filter(|line| !uac_lines.contains(line))
+                .collect();
+            let new_content = filtered.join("\n");
+            let trailing_newline = content.ends_with('\n') && !new_content.is_empty();
+            let final_content = if trailing_newline && !new_content.ends_with('\n') {
+                format!("{}\n", new_content)
+            } else {
+                new_content
+            };
+            std::fs::write(&gitignore_path, final_content)
+                .map_err(|e| format!("Failed to update .gitignore: {}", e))?;
+        }
+    }
+
+    // ── Update saved projects list ───────────────────────────────────
+    if let Ok(mut projects) = load_saved_projects() {
+        let mut changed = false;
+        for p in projects.iter_mut() {
+            if p.path == project_root && p.uac_adopted {
+                p.uac_adopted = false;
+                changed = true;
+            }
+        }
+        if changed {
+            let _ = save_saved_projects(&projects);
+        }
+    }
+
+    Ok(format!(
+        "Project unadopted: {} skill(s) rehydrated to 3 agent dirs, .gitignore cleaned, project marked not adopted",
+        skill_count
+    ))
+}
+
+#[tauri::command]
 fn upsert_project_mcp(project_root: String, payload: ShareMcpPayload) -> Result<(), String> {
     let name = payload.name.clone();
     let oc_path = format!("{}/.opencode/opencode.json", project_root);
@@ -2006,7 +2210,9 @@ pub fn run() {
             add_saved_project,
             remove_saved_project,
             scan_directory_for_projects,
-            get_project_preview
+            get_project_preview,
+            revert_global_config,
+            unadopt_project
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
